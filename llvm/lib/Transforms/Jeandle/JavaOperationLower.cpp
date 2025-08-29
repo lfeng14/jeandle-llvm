@@ -23,12 +23,13 @@ using namespace llvm::jeandle;
 #define DEBUG_TYPE "java-operation-lower"
 
 namespace {
+
 static bool runImpl(Module &M, int Phase) {
   bool Changed = false;
   InlineFunctionInfo IFI;
   bool LocalChanged = false;
   std::set<std::pair<const Function *, const Function *>> Seen;
-  
+
   auto isPhaseFunc = [&](const Function &F) -> bool {
     if (!F.hasFnAttribute(attr::LowerPhase))
       return false;
