@@ -21,67 +21,76 @@ using namespace llvm::jeandle;
 #define DEBUG_TYPE "java-operation-lower"
 
 namespace {
-
 static bool runImpl(Module &M, int Phase) {
-  bool Changed = false;
-  SmallVector<CallBase *, 16> CallInstructions;
-  InlineFunctionInfo IFI;
   SmallVector<Function *, 16> FunctionsToRemove;
+  bool Changed = false;
+  InlineFunctionInfo IFI;
 
-  for (Function &F : M) {
-    if (!F.hasFnAttribute(attr::JavaMethod))
-      continue;
+  auto isPhaseFunc = [&](const Function &F) -> bool {
+    if (!F.hasFnAttribute(attr::LowerPhase))
+      return false;
+    int V = 0;
+    bool Failed = F.getFnAttribute(attr::LowerPhase)
+                      .getValueAsString()
+                      .getAsInteger(10, V);
+    assert(!Failed && "wrong value of LowerPhase attribute");
+    return V == Phase;
+  };
 
-    if (F.isDeclaration())
-      continue;
+  bool LocalChanged = false;
+  do {
+    LocalChanged = false;
+    for (Function &F : M) {
+      if (F.isDeclaration())
+        continue;
+      SmallVector<CallBase *, 16> CallInstructions;
+      CallInstructions.clear();
 
-    for (Instruction &I : instructions(F)) {
-      if (auto *CB = dyn_cast<CallBase>(&I)) {
-        // Skip instructions that are not lowered in this phase.
+      // Collect direct calls to functions of the current phase within the
+      // current function
+      for (Instruction &I : instructions(F)) {
+        auto *CB = dyn_cast<CallBase>(&I);
+        if (!CB)
+          continue;
+
         Function *Callee = CB->getCalledFunction();
         if (!Callee || Callee->isDeclaration())
           continue;
 
-        if (!Callee->hasFnAttribute(attr::LowerPhase))
+        if (!isPhaseFunc(*Callee))
           continue;
 
-        Attribute LowerPhase = Callee->getFnAttribute(attr::LowerPhase);
-        int LowerPhaseValue;
-        bool Failed =
-            LowerPhase.getValueAsString().getAsInteger(10, LowerPhaseValue);
-        assert(!Failed && "wrong value of LowerPhase attribute");
-        if (LowerPhaseValue != Phase)
+        // Skip self-recursion to avoid attempting again on itself after
+        // inlining
+        if (Callee == &F)
           continue;
-
         CallInstructions.push_back(CB);
       }
-    }
-
-    // Inline
-    for (CallBase *CB : CallInstructions) {
-      if (InlineFunction(*CB, IFI).isSuccess()) {
-        Changed = true;
-        LLVM_DEBUG(dbgs() << "Successfully inlined: "
-                          << CB->getCalledFunction()->getName()
-                          << " in lower phase: " << Phase << "\n");
-      } else {
-        LLVM_DEBUG(dbgs() << "Failed to inline: "
-                          << CB->getCalledFunction()->getName()
-                          << " in lower phase: " << Phase << "\n");
+      // Inline the collected call sites
+      for (CallBase *CB : CallInstructions) {
+        // Record the name to avoid dangling pointers after inlining
+        Function *Callee = CB->getCalledFunction();
+        StringRef CalleeName = Callee ? Callee->getName() : StringRef();
+        InlineResult IR = InlineFunction(*CB, IFI);
+        if (IR.isSuccess()) {
+          LocalChanged = true;
+          LLVM_DEBUG(dbgs()
+                     << "Successfully inlined: " << CalleeName << " into "
+                     << F.getName() << " in lower phase: " << Phase << "\n");
+        } else {
+          LLVM_DEBUG(dbgs() << "Failed to inline: " << CalleeName << " into "
+                            << F.getName() << " in lower phase: " << Phase
+                            << " reason: " << IR.message() << "\n");
+        }
       }
     }
-  }
+    Changed |= LocalChanged;
+  } while (LocalChanged);
 
   // Remove unused functions.
   for (Function &F : M) {
-    if (!F.hasFnAttribute(attr::LowerPhase))
-      continue;
-    Attribute LowerPhase = F.getFnAttribute(attr::LowerPhase);
-    int LowerPhaseValue;
-    bool Failed =
-        LowerPhase.getValueAsString().getAsInteger(10, LowerPhaseValue);
-    assert(!Failed && "wrong value of LowerPhase attribute");
-    if (LowerPhaseValue == Phase) {
+    // Keep if called by functions of different phases
+    if (F.use_empty() || isPhaseFunc(F)) {
       assert(!F.hasFnAttribute(attr::JavaMethod) &&
              "inlined function should not be java method");
       FunctionsToRemove.push_back(&F);
