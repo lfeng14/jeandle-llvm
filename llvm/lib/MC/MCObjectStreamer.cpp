@@ -577,11 +577,6 @@ void MCObjectStreamer::emitCodeAlignment(Align Alignment,
   cast<MCAlignFragment>(getCurrentFragment())->setEmitNops(true, STI);
 }
 
-void MCObjectStreamer::emitHotspotPatchPoint(const MCSubtargetInfo *STI,
-                                             unsigned PatchBytes) {
-  insert(new MCHotspotPatchPointFragment(STI, PatchBytes));
-}
-
 void MCObjectStreamer::emitValueToOffset(const MCExpr *Offset,
                                          unsigned char Value,
                                          SMLoc Loc) {

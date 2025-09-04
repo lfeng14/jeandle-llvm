@@ -139,8 +139,6 @@ public:
                             unsigned MaxBytesToEmit = 0) override;
   void emitCodeAlignment(Align ByteAlignment, const MCSubtargetInfo *STI,
                          unsigned MaxBytesToEmit = 0) override;
-  void emitHotspotPatchPoint(const MCSubtargetInfo *STI,
-                             unsigned PatchBytes) override;
   void emitValueToOffset(const MCExpr *Offset, unsigned char Value,
                          SMLoc Loc) override;
   void emitDwarfLocDirective(unsigned FileNo, unsigned Line, unsigned Column,

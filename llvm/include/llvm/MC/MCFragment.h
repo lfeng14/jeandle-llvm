@@ -299,42 +299,6 @@ public:
   }
 };
 
-/// Used for statepoint to support MT-safe code patch point in hotspot.
-/// Only used for X86-64 backends.
-/// For X86-64 backends, to support MT-safe code patch, hotspot requires
-/// patch address to be 4-bytes aligned, so the patch point can lie within
-/// a single cache line and patch operation can simply rely on atomicity
-/// of 32-bit writes.
-/// A patch point ends up with a pc-relative call instruction. The size of
-/// the instruction is 5 bytes and the call destination (displacement)
-/// occupies the last 4 bytes. Should garantee the displacement is 4-bytes
-/// aligned.
-class MCHotspotPatchPointFragment : public MCFragment {
-private:
-  /// When emitting Nops some subtargets have specific nop encodings.
-  const MCSubtargetInfo *STI = nullptr;
-
-  /// Displacement should be 4-bytes aligned.
-  const Align Alignment = Align(4);
-
-  const unsigned Size;
-
-public:
-  /// Size of a pc-relative call intruction.
-  static const unsigned CallSize = 5;
-
-  MCHotspotPatchPointFragment(const MCSubtargetInfo *STI, unsigned Size)
-      : MCFragment(FT_HotspotPatchPoint, false), STI(STI), Size(Size) {}
-
-  unsigned getSize(unsigned Offset) const;
-
-  void emit(MCAsmBackend &MAB, raw_ostream &OS, unsigned Offset) const;
-
-  static bool classof(const MCFragment *F) {
-    return F->getKind() == FT_HotspotPatchPoint;
-  }
-};
-
 class MCFillFragment : public MCFragment {
   uint8_t ValueSize;
   /// Value to use for filling bytes.

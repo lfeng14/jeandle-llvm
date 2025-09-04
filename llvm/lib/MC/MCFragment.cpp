@@ -74,9 +74,6 @@ void MCFragment::destroy() {
     case FT_PseudoProbe:
       cast<MCPseudoProbeAddrFragment>(this)->~MCPseudoProbeAddrFragment();
       return;
-    case FT_HotspotPatchPoint:
-      delete cast<MCHotspotPatchPointFragment>(this);
-      return;
     case FT_Dummy:
       cast<MCDummyFragment>(this)->~MCDummyFragment();
       return;
@@ -259,22 +256,3 @@ LLVM_DUMP_METHOD void MCFragment::dump() const {
   OS << ">";
 }
 #endif
-
-unsigned MCHotspotPatchPointFragment::getSize(unsigned Offset) const {
-  return alignTo(Size + Offset % Alignment.value(), Alignment) -
-         Offset % Alignment.value();
-}
-
-void MCHotspotPatchPointFragment::emit(MCAsmBackend &MAB, raw_ostream &OS,
-                                       unsigned Offset) const {
-  if (getSize(Offset) - Size > 0 &&
-      !MAB.writeNopData(OS, getSize(Offset) - Size, STI)) {
-    report_fatal_error("unable to write nop sequence of " +
-                       Twine(getSize(Offset) - Size) + " bytes");
-  }
-
-  if (!MAB.writeNopData(OS, Size, STI)) {
-    report_fatal_error("unable to write nop sequence of " + Twine(Size) +
-                       " bytes");
-  }
-}

@@ -798,9 +798,11 @@ void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
   StatepointOpers SOpers(&MI);
   if (unsigned PatchBytes = SOpers.getNumPatchBytes()) {
     if (SOpers.getCallingConv() == CallingConv::Hotspot_JIT) {
-      assert(PatchBytes >= MCHotspotPatchPointFragment::CallSize &&
-             "At least a call instruction in patch point");
-      OutStreamer->emitHotspotPatchPoint(Subtarget, PatchBytes);
+      OutStreamer->emitCodeAlignment(Align(4), Subtarget);
+      unsigned Align = 4;
+      unsigned Mask = Align - 1;
+      emitX86Nops(*OutStreamer, Align - (PatchBytes & Mask), Subtarget);
+      emitX86Nops(*OutStreamer, PatchBytes, Subtarget);
     } else {
       emitX86Nops(*OutStreamer, PatchBytes, Subtarget);
     }

@@ -862,9 +862,6 @@ public:
   virtual void emitCodeAlignment(Align Alignment, const MCSubtargetInfo *STI,
                                  unsigned MaxBytesToEmit = 0);
 
-  virtual void emitHotspotPatchPoint(const MCSubtargetInfo *STI,
-                                     unsigned PatchBytes);
-
   /// Emit some number of copies of \p Value until the byte offset \p
   /// Offset is reached.
   ///

@@ -336,13 +336,6 @@ uint64_t MCAssembler::computeFragmentSize(const MCFragment &F) const {
   case MCFragment::FT_PseudoProbe:
     return cast<MCPseudoProbeAddrFragment>(F).getContents().size();
 
-  case MCFragment::FT_HotspotPatchPoint: {
-    const MCHotspotPatchPointFragment &HF =
-        cast<MCHotspotPatchPointFragment>(F);
-    unsigned Offset = getFragmentOffset(HF);
-    return HF.getSize(Offset);
-  }
-
   case MCFragment::FT_Dummy:
     llvm_unreachable("Should not have been added");
   }
@@ -812,13 +805,6 @@ static void writeFragment(raw_ostream &OS, const MCAssembler &Asm,
   case MCFragment::FT_PseudoProbe: {
     const MCPseudoProbeAddrFragment &PF = cast<MCPseudoProbeAddrFragment>(F);
     OS << PF.getContents();
-    break;
-  }
-  case MCFragment::FT_HotspotPatchPoint: {
-    const MCHotspotPatchPointFragment &HF =
-        cast<MCHotspotPatchPointFragment>(F);
-    unsigned Offset = Asm.getFragmentOffset(HF);
-    HF.emit(Asm.getBackend(), OS, Offset);
     break;
   }
   case MCFragment::FT_Dummy:
