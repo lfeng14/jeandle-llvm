@@ -13,8 +13,16 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Module.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/ProfileSummaryInfo.h"
+#include "llvm/Analysis/InlineAdvisor.h"
+#include "llvm/Analysis/InlineCost.h"
+#include <utility>
+#include <set>
 
 using namespace llvm;
 
@@ -22,51 +30,91 @@ using namespace llvm;
 
 namespace {
 
-static bool runImpl(Module &M, int Phase) {
-  bool Changed = false;
-  InlineFunctionInfo IFI;
+bool isPhaseFunc(const Function &F, int Phase) {
+  if (!F.hasFnAttribute(jeandle::Attribute::LowerPhase))
+    return false;
+  int V = 0;
+  bool Failed = F.getFnAttribute(jeandle::Attribute::LowerPhase)
+                    .getValueAsString()
+                    .getAsInteger(10, V);
+  assert(!Failed && "wrong value of LowerPhase attribute");
+  return V == Phase;
+};
 
-  for (Function &F : M) {
-    LLVM_DEBUG(dbgs() << "Searching in function: " << F.getName()
-                      << " in lower phase: " << Phase << "\n");
-    if (F.isDeclaration())
+static bool runImpl(Module &M, int Phase, ModuleAnalysisManager &MAM, ProfileSummaryInfo &PSI,
+    FunctionAnalysisManager *FAM,
+    function_ref<AssumptionCache &(Function &)> GetAssumptionCache) {
+
+  SmallSetVector<CallBase *, 16> Calls;
+  bool Changed = false;
+  SmallVector<Function *, 16> InlinedComdatFunctions;
+
+  for (Function &F : make_early_inc_range(M)) {
+    if (F.isPresplitCoroutine())
       continue;
 
-    SmallVector<CallBase *, 16> CallInstructions;
-    for (Instruction &I : instructions(F)) {
-      if (auto *CB = dyn_cast<CallBase>(&I)) {
-        // Skip instructions that are not lowered in this phase.
-        Function *Callee = CB->getCalledFunction();
-        if (!Callee || Callee->isDeclaration())
-          continue;
+    if (!isPhaseFunc(F, Phase) || F.isDeclaration() || !isInlineViable(F).isSuccess())
+      continue;
 
-        if (!Callee->hasFnAttribute(jeandle::Attribute::LowerPhase))
-          continue;
-
-        Attribute LowerPhase =
-            Callee->getFnAttribute(jeandle::Attribute::LowerPhase);
-        int LowerPhaseValue;
-        bool Failed =
-            LowerPhase.getValueAsString().getAsInteger(10, LowerPhaseValue);
-        assert(!Failed && "wrong value of LowerPhase attribute");
-        if (LowerPhaseValue != Phase)
-          continue;
-
-        CallInstructions.push_back(CB);
+    Calls.clear();
+    for (User *U : F.users())
+      if (auto *CB = dyn_cast<CallBase>(U)) {
+        if (CB->getCalledFunction() == &F &&
+            !CB->getAttributes().hasFnAttr(Attribute::NoInline))
+          Calls.insert(CB);
       }
+
+    for (CallBase *CB : Calls) {
+      Function *Caller = CB->getCaller();
+      OptimizationRemarkEmitter ORE(Caller);
+      DebugLoc DLoc = CB->getDebugLoc();
+      BasicBlock *Block = CB->getParent();
+
+      InlineFunctionInfo IFI(GetAssumptionCache, &PSI, nullptr, nullptr);
+      InlineResult Res = InlineFunction(*CB, IFI);
+      if (!Res.isSuccess()) {
+        LLVM_DEBUG(dbgs() << "failed to inline: " << Caller->getName()
+                          << " in lower phase: " << Phase << "\n");
+        continue;
+      }
+
+      emitInlinedIntoBasedOnCost(
+          ORE, DLoc, Block, F, *Caller,
+          InlineCost::getAlways("always inline attribute"),
+          /*ForProfileContext=*/false, DEBUG_TYPE);
+
+      Changed = true;
+      if (FAM)
+        FAM->invalidate(*Caller, PreservedAnalyses::none());
     }
 
-    // Inline
-    for (CallBase *CB : CallInstructions) {
-      Function *Callee = CB->getCalledFunction();
-      if (InlineFunction(*CB, IFI).isSuccess()) {
-        Changed = true;
-        LLVM_DEBUG(dbgs() << "Successfully inlined: " << Callee->getName()
-                          << " in lower phase: " << Phase << "\n");
-      } else {
-        LLVM_DEBUG(dbgs() << "Failed to inline: " << Callee->getName()
-                          << " in lower phase: " << Phase << "\n");
-      }
+    F.removeDeadConstantUsers();
+    // Remember to try and delete this function afterward. This allows to call
+    // filterDeadComdatFunctions() only once.
+    if (F.hasComdat()) {
+      InlinedComdatFunctions.push_back(&F);
+    } else {
+      if (FAM)
+        FAM->clear(F, F.getName());
+      LLVM_DEBUG(dbgs() << "remove unused function: " << F->getName()
+                  << " in lower phase: " << Phase << "\n");
+      M.getFunctionList().erase(F);
+      Changed = true;
+    }
+  }
+
+  if (!InlinedComdatFunctions.empty()) {
+    // Now we just have the comdat functions. Filter out the ones whose comdats
+    // are not actually dead.
+    filterDeadComdatFunctions(InlinedComdatFunctions);
+    // The remaining functions are actually dead.
+    for (Function *F : InlinedComdatFunctions) {
+      if (FAM)
+        FAM->clear(*F, F->getName());
+      LLVM_DEBUG(dbgs() << "remove unused function: " << F->getName()
+                  << " in lower phase: " << Phase << "\n");
+      M.getFunctionList().erase(F);
+      Changed = true;
     }
   }
 
@@ -79,36 +127,14 @@ namespace llvm {
 
 PreservedAnalyses JavaOperationLower::run(Module &M,
                                           ModuleAnalysisManager &MAM) {
-  // TODO: Just a workaround here. A more efficient algorithm is needed in later
-  // work.
+                                              FunctionAnalysisManager &FAM =
+  MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  auto GetAssumptionCache = [&](Function &F) -> AssumptionCache & {
+  return FAM.getResult<AssumptionAnalysis>(F);
+  };
+  auto &PSI = MAM.getResult<ProfileSummaryAnalysis>(M);
 
-  bool Changed = false;
-  while (runImpl(M, Phase)) {
-    Changed = true;
-  }
-
-  // Remove unused functions.
-  SmallVector<Function *> FunctionsToRemove;
-  for (Function &F : M) {
-    if (!F.hasFnAttribute(jeandle::Attribute::LowerPhase))
-      continue;
-    Attribute LowerPhase = F.getFnAttribute(jeandle::Attribute::LowerPhase);
-    int LowerPhaseValue;
-    bool Failed =
-        LowerPhase.getValueAsString().getAsInteger(10, LowerPhaseValue);
-    assert(!Failed && "wrong value of LowerPhase attribute");
-    if (LowerPhaseValue == Phase) {
-      FunctionsToRemove.push_back(&F);
-    }
-  }
-  for (Function *F : FunctionsToRemove) {
-    LLVM_DEBUG(dbgs() << "Remove unused function: " << F->getName()
-                      << " in lower phase: " << Phase << "\n");
-    F->eraseFromParent();
-    Changed = true;
-  }
-
-  if (!Changed)
+  if (!runImpl(M, Phase, MAM, PSI, &FAM, GetAssumptionCache))
     return PreservedAnalyses::all();
   return PreservedAnalyses::none();
 }
