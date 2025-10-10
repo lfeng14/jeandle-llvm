@@ -21,8 +21,6 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
-#include <set>
-#include <utility>
 
 using namespace llvm;
 
@@ -48,15 +46,13 @@ runImpl(Module &M, int Phase, FunctionAnalysisManager *FAM,
     return V == Phase;
   };
 
-  // Traverse in the order of function definitions in the code.
-  // Note that the traversal order has no impact on the final inlining result
   for (Function &F : make_early_inc_range(M)) {
     if (!shouldInline(F))
       continue;
 
     assert(!F.isPresplitCoroutine() &&
-           "Presplit coroutine functions should not be here");
-    assert(!F.isDeclaration() && "Function declarations should not be here");
+           "A presplit coroutine function should not be a JavaOp");
+    assert(!F.isDeclaration() && "A function declaration should not be a JavaOp");
     assert(isInlineViable(F).isSuccess() &&
            "Function should be viable for inlining");
 
@@ -71,7 +67,7 @@ runImpl(Module &M, int Phase, FunctionAnalysisManager *FAM,
       Function *Caller = CB->getCaller();
       InlineFunctionInfo IFI(GetAssumptionCache, &PSI, nullptr, nullptr);
       InlineResult Res =
-          InlineFunction(*CB, IFI, /*MergeAttributes=*/true, &GetAAR(F), true);
+          InlineFunction(*CB, IFI, /*MergeAttributes=*/true, &GetAAR(F), /*InsertLifetime=*/true);
       if (!Res.isSuccess()) {
         LLVM_DEBUG(dbgs() << "failed to inline: " << Caller->getName()
                           << " in lower phase: " << Phase << "\n");
@@ -80,14 +76,19 @@ runImpl(Module &M, int Phase, FunctionAnalysisManager *FAM,
 
       if (FAM)
         FAM->invalidate(*Caller, PreservedAnalyses::none());
-      Changed = true;
     }
+
     F.removeDeadConstantUsers();
+
+    assert(F.user_empty() && "JavaOp should not be used after lowering");
+
     if (FAM)
       FAM->clear(F, F.getName());
-    LLVM_DEBUG(dbgs() << "remove unused function: " << F.getName()
-                      << " in lower phase: " << Phase << "\n");
     M.getFunctionList().erase(F);
+
+    LLVM_DEBUG(dbgs() << "remove lowered JavaOp: " << F.getName()
+                      << " in lower phase: " << Phase << "\n");
+
     Changed = true;
   }
   return Changed;
