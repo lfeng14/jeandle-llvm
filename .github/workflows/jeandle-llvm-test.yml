@@ -11,10 +11,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  jeandle-llvm-test:
     name: "jeandle-llvm test"
     runs-on: ubuntu-22.04
-
     steps:
       - name: 'checkout the source code'
         uses: actions/checkout@v4
@@ -62,3 +61,110 @@ jobs:
           else
             exit 0
           fi
+
+  ###
+  ### Determine platforms to include
+  ###
+
+  prepare:
+    name: 'Prepare the run'
+    needs:
+      - clang-format
+      - jeandle-llvm-test
+    runs-on: ubuntu-22.04
+    outputs:
+      linux-x64: true # We always run test on x86
+      linux-aarch64: ${{ contains(github.event.pull_request.labels.*.name, 'AArch64') }}
+      linux-riscv64: ${{ contains(github.event.pull_request.labels.*.name, 'RISC-V') }}
+
+    steps:
+      - name: 'Checkout the scripts'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            make/conf/github-actions.conf
+
+      - name: 'Build JTReg'
+        id: jtreg
+        uses: ./.github/actions/build-jtreg
+
+  ###
+  ### Build jobs
+  ###
+
+  build-linux-x64:
+    name: linux-x64
+    needs: prepare
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      platform: linux-x64
+      gcc-major-version: '10'
+      configure-arguments: ${{ github.event.inputs.configure-arguments }}
+      make-arguments: ${{ github.event.inputs.make-arguments }}
+      runs-on: ubuntu-22.04
+    if: needs.prepare.outputs.linux-x64 == 'true'
+
+  build-linux-aarch64:
+    name: linux-aarch64
+    needs: prepare
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      platform: linux-aarch64
+      gcc-major-version: '10'
+      configure-arguments: ${{ github.event.inputs.configure-arguments }}
+      make-arguments: ${{ github.event.inputs.make-arguments }}
+      runs-on: ubuntu-22.04-arm
+    if: needs.prepare.outputs.linux-aarch64 == 'true'
+
+  build-linux-aarch64-cross-compile:
+    name: linux-aarch64-cross-compile
+    needs: prepare
+    uses: ./.github/workflows/build-cross-compile.yml
+    with:
+      gcc-major-version: '10'
+      target-cpu: aarch64
+      gnu-arch: aarch64
+      debian-arch: arm64
+      debian-repository: http://ports.ubuntu.com/ubuntu-ports/
+      debian-version: jammy
+      llvm-target: AArch64
+    if: needs.prepare.outputs.linux-aarch64 == 'true'
+
+  build-linux-riscv64-cross-compile:
+    name: linux-riscv64-cross-compile
+    needs: prepare
+    uses: ./.github/workflows/build-cross-compile.yml
+    with:
+      gcc-major-version: '10'
+      target-cpu: riscv64
+      gnu-arch: riscv64
+      debian-arch: riscv64
+      debian-repository: http://ports.ubuntu.com/ubuntu-ports/
+      debian-version: jammy
+      llvm-target: RISCV
+    if: needs.prepare.outputs.linux-riscv64 == 'true'
+
+  ###
+  ### Test jobs
+  ###
+
+  test-linux-x64:
+    name: linux-x64
+    needs:
+      - build-linux-x64
+    uses: ./.github/workflows/test.yml
+    with:
+      platform: linux-x64
+      bootjdk-platform: linux-x64
+      runs-on: ubuntu-22.04
+
+  test-linux-aarch64:
+    name: linux-aarch64
+    needs:
+      - build-linux-aarch64
+    uses: ./.github/workflows/test.yml
+    with:
+      platform: linux-aarch64
+      bootjdk-platform: linux-aarch64
+      runs-on: ubuntu-22.04-arm
