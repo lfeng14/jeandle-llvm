@@ -62,3 +62,108 @@ jobs:
           else
             exit 0
           fi
+
+  repository-dispatch-jdk-test:
+    name: "jeandle-jdk tier1 test"
+    runs-on: ubuntu-22.04
+    needs:
+      - test
+      - clang-format
+    steps:
+      - name: jeandle-jdk-tier1-test
+        uses: peter-evans/repository-dispatch@v2
+        with:
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          repository: lfeng14/jeandle-jdk
+          event-type: "dispatch-from-llvm"
+          client-payload: |
+            {
+              "id": "dispatch-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.repo.full_name }}",
+              "target_llvm_repo": "${{ github.event.pull_request.head.repo.full_name }}",
+              "target_llvm_ref": "${{ github.event.pull_request.head.ref }}",
+              "linux_aarch64": "${{ contains(github.event.pull_request.labels.*.name, 'AArch64') }}"
+              "linux_riscv64": "${{ contains(github.event.pull_request.labels.*.name, 'RISC-V') }}"
+            }
+
+      - name: sync-jdk-rest
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+          TARGET_REPO: "lfeng14/jeandle-jdk"
+          # Generate the exact ID to search for in step names
+          SEARCH_ID: "dispatch-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.repo.full_name }}"
+        run: |
+          set -x
+          # --- Phase 1: Find the triggered workflow run by matching step name ---
+          echo "Searching for workflow run with step containing: '$SEARCH_ID'"
+          FOUND_RUN_ID=""
+          MAX_FIND_ATTEMPTS=30
+
+          for attempt in $(seq 1 $MAX_FIND_ATTEMPTS); do
+            echo "Find attempt $attempt/$MAX_FIND_ATTEMPTS"
+
+            # Fetch recent 100 repository_dispatch runs
+            RUNS_RESPONSE=$(curl -s -f -L \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$TARGET_REPO/actions/runs?event=repository_dispatch&per_page=50")
+
+            # Extract run IDs
+            RUN_IDS=$(echo "$RUNS_RESPONSE" | jq -r '.workflow_runs[].id')
+
+            for run_id in $RUN_IDS; do
+              # Fetch jobs for this run
+              JOBS_RESPONSE=$(curl -s -f -L \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/$TARGET_REPO/actions/runs/$run_id/jobs")
+
+              # Check if any step name contains our SEARCH_ID
+              MATCH=$(echo "$JOBS_RESPONSE" | jq -r --arg ID "$SEARCH_ID" '
+                .jobs[]?.steps[]?.name | select(. != null) | select(contains($ID))' | head -1)
+
+              if [ -n "$MATCH" ]; then
+                FOUND_RUN_ID=$run_id
+                echo "Found matching run: $FOUND_RUN_ID (matched step: '$MATCH')"
+                break 2
+              fi
+            done
+
+            if [ -z "$FOUND_RUN_ID" ] && [ $attempt -lt $MAX_FIND_ATTEMPTS ]; then
+              sleep 60
+            fi
+          done
+
+          if [ -z "$FOUND_RUN_ID" ]; then
+            echo "::error::Could not find $SEARCH_ID workflow run after $MAX_FIND_ATTEMPTS attempts"
+            exit 1
+          fi
+
+          # --- Phase 2: Poll until completion ---
+          echo "Monitoring run $FOUND_RUN_ID"
+          MAX_POLLS=$((24 * 60))
+
+          for poll in $(seq 1 $MAX_POLLS); do
+            RUN_INFO=$(curl -s -f -L \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$TARGET_REPO/actions/runs/$FOUND_RUN_ID")
+
+            STATUS=$(echo "$RUN_INFO" | jq -r '.status')
+            CONCLUSION=$(echo "$RUN_INFO" | jq -r '.conclusion // "pending"')
+
+            if [ "$STATUS" = "completed" ]; then
+              if [ "$CONCLUSION" = "success" ]; then
+                echo "PR $SEARCH_ID workflow succeeded"
+                exit 0
+              else
+                echo "PR $SEARCH_ID workflow failed: $CONCLUSION"
+                echo "Details: https://github.com/$TARGET_REPO/actions/runs/$FOUND_RUN_ID"
+                exit 1
+              fi
+            fi
+
+            sleep 60
+          done
+
+          echo "::error::Polling timed out after $MAX_POLLS minutes"
+          exit 1
