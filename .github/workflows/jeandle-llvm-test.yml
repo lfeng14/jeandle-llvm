@@ -67,12 +67,9 @@ jobs:
             exit 0
           fi
 
-  repository-dispatch-jdk-test:
-    name: "jeandle-jdk tier1 test"
+  dispatch-to-jdk-test:
+    name: "dispatch jeandle-jdk"
     runs-on: ubuntu-22.04
-    needs:
-      - test
-      - clang-format
     steps:
       - name: jeandle-jdk-tier1-test
         uses: peter-evans/repository-dispatch@v2
@@ -99,7 +96,7 @@ jobs:
           # --- Phase 1: Find the triggered workflow run by matching step name ---
           echo "Searching for workflow run with step containing: '$SEARCH_ID'"
           FOUND_RUN_ID=""
-          MAX_FIND_ATTEMPTS=30
+          MAX_FIND_ATTEMPTS=$((12 * 60))
 
           for attempt in $(seq 1 $MAX_FIND_ATTEMPTS); do
             echo "Find attempt $attempt/$MAX_FIND_ATTEMPTS"
