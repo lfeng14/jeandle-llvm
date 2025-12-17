@@ -79,7 +79,7 @@ jobs:
           event-type: "dispatch-from-llvm"
           client-payload: |
             {
-              "id": "Dispatch-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.repo.full_name }}-${{ github.event.pull_request.head.ref }}-${{ github.run_id }}",
+              "id": "Dispatch-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.repo.full_name }}-${{ github.event.pull_request.head.ref }}-${{ github.run_id }}-${{ github.run_attempt }}",
               "target_llvm_repo": "${{ github.event.pull_request.head.repo.full_name }}",
               "target_llvm_ref": "${{ github.event.pull_request.head.ref }}",
               "linux_aarch64": "${{ contains(github.event.pull_request.labels.*.name, 'AArch64') }}",
@@ -91,7 +91,7 @@ jobs:
           GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
           TARGET_REPO: "jeandle/jeandle-jdk"
           # Generate the exact ID to search for in step names
-          SEARCH_ID: "Dispatch-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.repo.full_name }}-${{ github.event.pull_request.head.ref }}-${{ github.run_id }}"
+          SEARCH_ID: "Dispatch-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.repo.full_name }}-${{ github.event.pull_request.head.ref }}-${{ github.run_id }}-${{ github.run_attempt }}"
         run: |
           # --- Phase 1: Find the triggered workflow run by matching step name ---
           echo "Searching for workflow run with step containing: '$SEARCH_ID'"
