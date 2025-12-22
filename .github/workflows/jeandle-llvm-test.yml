@@ -82,8 +82,7 @@ jobs:
               "id": "Dispatch-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.repo.full_name }}-${{ github.event.pull_request.head.ref }}-${{ github.run_id }}-${{ github.run_attempt }}",
               "target_llvm_repo": "${{ github.event.pull_request.head.repo.full_name }}",
               "target_llvm_ref": "${{ github.event.pull_request.head.ref }}",
-              "linux_aarch64": "${{ contains(github.event.pull_request.labels.*.name, 'AArch64') }}",
-              "linux_riscv64": "${{ contains(github.event.pull_request.labels.*.name, 'RISC-V') }}"
+              "labels": ${{ toJSON(github.event.pull_request.labels.*.name) }}
             }
 
       - name: sync-jdk-rest
