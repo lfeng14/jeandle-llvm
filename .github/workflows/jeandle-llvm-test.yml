@@ -162,3 +162,4 @@ jobs:
 
           echo "::error::Polling timed out after $MAX_POLLS minutes"
           exit 1
+    if: ${{ github.event_name == 'pull_request_target' && !contains(github.event.pull_request.labels.*.name, 'jdk-dependent') }}
