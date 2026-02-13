@@ -5,12 +5,14 @@
 ; CHECK-USE: define hotspotcc void @test_card_table_barrier
 ; CHECK-USE: store atomic ptr addrspace(1) %src, ptr addrspace(1) %derived.pointer
 ; CHECK-USE-NEXT: %base.pointer = call ptr addrspace(1) @llvm.experimental.gc.get.pointer.base.p1.p1(ptr addrspace(1) %derived.pointer)
-; CHECK-USE-NEXT: call hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %base.pointer)
+; CHECK-USE-NEXT: call hotspotcc void @jeandle.post_barrier(ptr addrspace(1) %base.pointer, ptr addrspace(1) %src)
 
 ; CHECK-ERASE-NOT: @llvm.used = appending global
 ; CHECK-ERASE-NOT: @jeandle.card_table_barrier
+; CHECK-ERASE-NOT: @jeandle.pre_barrier
+; CHECK-ERASE-NOT: @jeandle.post_barrier
 
-@llvm.used = appending global [1 x ptr] [ptr @jeandle.card_table_barrier], section "llvm.metadata"
+@llvm.used = appending global [3 x ptr] [ptr @jeandle.card_table_barrier, ptr @jeandle.pre_barrier, ptr @jeandle.post_barrier], section "llvm.metadata"
 
 define private hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr) #0 {
 entry:
@@ -18,6 +20,17 @@ entry:
   %1 = lshr i64 %0, 9
   %2 = getelementptr inbounds i8, ptr inttoptr (i64 139709660639232 to ptr), i64 %1
   store atomic i8 0, ptr %2 unordered, align 1
+  ret void
+}
+
+define private hotspotcc void @jeandle.pre_barrier(ptr addrspace(1) %addr) #0 {
+entry:
+  ret void
+}
+
+define private hotspotcc void @jeandle.post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) captures(none) %oop) #0 {
+entry:
+  call void @jeandle.card_table_barrier(ptr addrspace(1) %addr)
   ret void
 }
 

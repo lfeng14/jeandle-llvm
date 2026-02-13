@@ -67,9 +67,13 @@ PreservedAnalyses InsertGCBarriers::run(Function &F,
     return PreservedAnalyses::all();
   }
 
-  Function *CardTableBarrierFunc = M->getFunction("jeandle.card_table_barrier");
-  assert(CardTableBarrierFunc != nullptr &&
-         "jeandle.card_table_barrier must exist");
+  Function *PreBarrierFunc = M->getFunction("jeandle.pre_barrier");
+  assert(PreBarrierFunc != nullptr &&
+         "jeandle.pre_barrier must exist");
+
+  Function *PostBarrierFunc = M->getFunction("jeandle.post_barrier");
+  assert(PostBarrierFunc != nullptr &&
+         "jeandle.post_barrier must exist");
 
   LLVM_DEBUG(dbgs() << "Inserting GC barriers in " << F.getName() << "\n");
   SmallVector<StoreInst *> JavaHeapStores;
@@ -80,15 +84,22 @@ PreservedAnalyses InsertGCBarriers::run(Function &F,
   }
 
   for (auto SI : JavaHeapStores) {
-    IRBuilder<> Builder(SI->getNextNode());
-
     Value *DerivedPointer = SI->getPointerOperand();
+    Value *StoredValue = SI->getValueOperand();
     Type *PointerTy = DerivedPointer->getType();
-    Value *BasePointer = Builder.CreateIntrinsic(
+
+    // Insert pre-barrier before the store.
+    IRBuilder<> PreBuilder(SI);
+    CallInst *PreCall = PreBuilder.CreateCall(PreBarrierFunc, DerivedPointer);
+    PreCall->setCallingConv(CallingConv::Hotspot_JIT);
+
+    // Insert post-barrier after the store.
+    IRBuilder<> PostBuilder(SI->getNextNode());
+    Value *BasePointer = PostBuilder.CreateIntrinsic(
         Intrinsic::experimental_gc_get_pointer_base, {PointerTy, PointerTy},
         {DerivedPointer}, {} /* FMFSource */, "base.pointer");
-    CallInst *call = Builder.CreateCall(CardTableBarrierFunc, BasePointer);
-    call->setCallingConv(CallingConv::Hotspot_JIT);
+    CallInst *PostCall = PostBuilder.CreateCall(PostBarrierFunc, {BasePointer, StoredValue});
+    PostCall->setCallingConv(CallingConv::Hotspot_JIT);
     Changed = true;
   }
 
