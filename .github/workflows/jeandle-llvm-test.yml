@@ -50,6 +50,7 @@ jobs:
           fetch-depth: 1
       - name: clang-format
         run : |
+          sudo apt-get remove -y clang-format
           sudo apt-get update
           sudo apt-get install -y wget
           sudo apt install -y software-properties-common
