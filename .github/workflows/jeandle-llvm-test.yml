@@ -50,6 +50,7 @@ jobs:
           fetch-depth: 1
       - name: clang-format
         run : |
+          set -x
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           sudo add-apt-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-16 main"
           sudo apt install -y clang-format-16
