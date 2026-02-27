@@ -52,6 +52,15 @@ jobs:
           fetch-depth: 1
       - name: clang-format
         run : |
+          apt-get update
+          apt-get install -y wget
+          apt install -y software-properties-common
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key |  apt-key add -
+          add-apt-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-16 main"
+
+          apt install -y clang-format-16
+          update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-16 180
+          
           git remote add jeandle-main https://github.com/jeandle/jeandle-llvm.git
           git fetch --depth=1 jeandle-main
           sudo apt-get install -y clang-format
