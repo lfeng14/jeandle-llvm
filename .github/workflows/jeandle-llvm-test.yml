@@ -51,18 +51,13 @@ jobs:
       - name: clang-format
         run : |
           sudo apt-get update
-          sudo apt-get install -y wget
-          sudo apt install -y software-properties-common
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           sudo add-apt-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-16 main"
-
           sudo apt install -y clang-format-16
-          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-16 180
-          clang-format --version
 
           git remote add jeandle-main https://github.com/jeandle/jeandle-llvm.git
           git fetch --depth=1 jeandle-main
-          git clang-format jeandle-main/main
+          git clang-format-16 jeandle-main/main
           if [ -n "$(git status --porcelain)" ]; then
             echo "Format check failed!"
             exit 1
