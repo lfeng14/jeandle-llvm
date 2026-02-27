@@ -107,6 +107,7 @@ PreservedAnalyses InsertGCBarriers::run(Function &F,
     return PreservedAnalyses::all();
   }
 
+
   PreservedAnalyses PA;
   PA.preserveSet<CFGAnalyses>();
   PA.preserve<LoopAnalysis>();
