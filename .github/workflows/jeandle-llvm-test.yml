@@ -58,7 +58,7 @@ jobs:
 
           sudo apt install -y clang-format-16
           sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-16 180
-          clang-format --versioin
+          clang-format --version
 
           git remote add jeandle-main https://github.com/jeandle/jeandle-llvm.git
           git fetch --depth=1 jeandle-main
