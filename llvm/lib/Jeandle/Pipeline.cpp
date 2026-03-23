@@ -34,7 +34,7 @@ Pipeline::Pipeline(OptimizationLevel level) {
 }
 
 ModulePassManager Pipeline::buildJeandlePipeline(PassBuilder &PB,
-                                               OptimizationLevel level) {
+                                                 OptimizationLevel level) {
   ModulePassManager PM;
   PM.addPass(JavaOperationLower(0));
   PM.addPass(std::move(PB.buildPerModuleDefaultPipeline(level)));
