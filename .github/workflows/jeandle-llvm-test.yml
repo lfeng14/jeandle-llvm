@@ -85,7 +85,7 @@ jobs:
               "labels": ${{ toJSON(github.event.pull_request.labels.*.name) }}
             }
 
-      - name: sync-jdk-rest
+      - name: sync-jdk-result
         env:
           GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
           TARGET_REPO: "jeandle/jeandle-jdk"
@@ -133,7 +133,7 @@ jobs:
           done
 
           if [ -z "$FOUND_RUN_ID" ]; then
-            echo "::error::Could not find $SEARCH_ID workflow run after $MAX_FIND_ATTEMPTS attempts"
+            echo "::error Could not find $SEARCH_ID workflow run after $MAX_FIND_ATTEMPTS attempts"
             exit 1
           fi
 
@@ -164,6 +164,6 @@ jobs:
             sleep 60
           done
 
-          echo "::error::Polling timed out after $MAX_POLLS minutes"
+          echo "::error Polling timed out after $MAX_POLLS minutes"
           exit 1
     if: ${{ github.event_name == 'pull_request_target' && !contains(github.event.pull_request.labels.*.name, 'jdk-dependent') }}
