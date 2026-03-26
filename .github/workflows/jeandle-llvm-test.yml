@@ -73,7 +73,7 @@ jobs:
         uses: peter-evans/repository-dispatch@v2
         with:
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
-          repository: jeandle/jeandle-jdk
+          repository: lfeng14/jeandle-jdk
           event-type: "dispatch-from-llvm"
           client-payload: |
             {
@@ -86,7 +86,7 @@ jobs:
       - name: sync-jdk-result
         env:
           GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
-          TARGET_REPO: "jeandle/jeandle-jdk"
+          TARGET_REPO: "lfeng14/jeandle-jdk"
           # Generate the exact ID to search for in step names
           SEARCH_ID: "Dispatch-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.repo.full_name }}-${{ github.event.pull_request.head.ref }}-${{ github.run_id }}-${{ github.run_attempt }}"
         run: |
