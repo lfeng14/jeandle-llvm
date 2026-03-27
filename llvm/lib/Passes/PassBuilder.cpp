@@ -392,8 +392,6 @@
 
 using namespace llvm;
 
-static const Regex DefaultAliasRegex("^(jeandle)<(O[0123sz])>$");
-
 cl::opt<bool> llvm::PrintPipelinePasses(
     "print-pipeline-passes",
     cl::desc("Print a '-passes' compatible string describing the pipeline "
@@ -1777,10 +1775,6 @@ static bool callbacksAcceptPassName(StringRef Name, CallbacksT &Callbacks) {
 
 template <typename CallbacksT>
 static bool isModulePassName(StringRef Name, CallbacksT &Callbacks) {
-  // TODO: Manually handle aliases for jeandle pipeline. Treat it as normal pass later.
-  if (Name.starts_with("jeandle"))
-    return DefaultAliasRegex.match(Name);
-
   StringRef NameNoBracket = Name.take_until([](char C) { return C == '<'; });
 
   // Explicitly handle pass manager names.
@@ -2038,24 +2032,6 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
         formatv("invalid use of '{}' pass as module pipeline", Name).str(),
         inconvertibleErrorCode());
     ;
-  }
-
-  // TODO: Manually handle aliases for jeandle pipeline. Treat it as normal pass later.
-  if (Name.starts_with("jeandle")) {
-    SmallVector<StringRef, 3> Matches;
-    if (!DefaultAliasRegex.match(Name, &Matches))
-      return make_error<StringError>(
-          formatv("unknown default pipeline alias '{0}'", Name).str(),
-          inconvertibleErrorCode());
-
-    assert(Matches.size() == 3 && "Must capture two matched strings!");
-
-    OptimizationLevel L = *parseOptLevel(Matches[2]);
-
-    if (Matches[1] == "jeandle") {
-      jeandle::Pipeline::buildJeandlePipeline(MPM, *this, L);
-    }
-    return Error::success();
   }
 
   // Finally expand the basic registered passes from the .inc file.
