@@ -108,7 +108,6 @@ jobs:
                 "https://api.github.com/repos/$TARGET_REPO/actions/runs/$run_id/cancel" || true
             fi
           done
-
       - name: jeandle-jdk-tier1-test
         uses: peter-evans/repository-dispatch@v2
         with:

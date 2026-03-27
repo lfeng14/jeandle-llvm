@@ -30,17 +30,19 @@ Pipeline::Pipeline(OptimizationLevel level) {
   PB.registerLoopAnalyses(LAM);
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
-  buildJeandlePipeline(PM, PB, level);
+  PM = buildJeandlePipeline(PB, level);
 }
 
-void Pipeline::buildJeandlePipeline(ModulePassManager &PM, PassBuilder &PB,
-                                    OptimizationLevel level) {
+ModulePassManager Pipeline::buildJeandlePipeline(PassBuilder &PB,
+                                                 OptimizationLevel level) {
+  ModulePassManager PM;
   PM.addPass(JavaOperationLower(0));
   PM.addPass(std::move(PB.buildPerModuleDefaultPipeline(level)));
   PM.addPass(createModuleToFunctionPassAdaptor(InsertGCBarriers()));
   PM.addPass(JavaOperationLower(1));
   PM.addPass(createModuleToFunctionPassAdaptor(TLSPointerRewrite()));
   PM.addPass(RewriteStatepointsForGC());
+  return PM;
 }
 
 void Pipeline::run(Module &M) { PM.run(M, MAM); }
