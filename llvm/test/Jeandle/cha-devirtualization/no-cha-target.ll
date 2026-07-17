@@ -26,6 +26,7 @@ unwind:
 ; CHECK: invoke hotspotcc i32 @Virtual_target(ptr addrspace(1) %recv) #[[CALLATTR:[0-9]+]]
 ; CHECK: attributes #[[CALLATTR]] = { {{.*}}"bytecode"="invokevirtual"{{.*}}"statepoint-num-patch-bytes"="15"{{.*}} }
 ; CHECK-NOT: @Optimized_target
+; CHECK-NOT: "monomorphic-target"
 
 attributes #0 = { "java-method"="100" }
 attributes #1 = { "java-method"="200" }

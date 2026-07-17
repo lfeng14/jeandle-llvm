@@ -11,6 +11,7 @@
 #ifndef LLVM_TRANSFORMS_JEANDLE_JEANDLEUTILS_H
 #define LLVM_TRANSFORMS_JEANDLE_JEANDLEUTILS_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Dominators.h"
@@ -19,8 +20,26 @@
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/Deoptimization.h"
+#include "llvm/IR/Module.h"
 
 namespace llvm {
+
+/// Reads the HotSpot patch size used by optimized virtual calls.
+int getStaticCallPatchSize(const Module &M);
+
+/// Rewrites a virtual invoke's call-site attributes for an optimized virtual
+/// call. Profile-guided callers may leave \p MarkMonomorphicTarget false when
+/// the guarded direct call should not be considered by the inliner.
+void updateStaticOptVirtualCallAttrs(InvokeInst &CB, int PatchSize,
+                                     bool MarkMonomorphicTarget = true);
+
+/// Replaces the statepoint id carried by a call site.
+void setStatepointID(CallBase &CB, uint64_t StatepointID);
+
+/// Reports a malformed statepoint id with call-site context.
+[[noreturn]] void reportInvalidStatepointID(const CallBase &CB,
+                                            StringRef Component,
+                                            StringRef Reason);
 
 /// Emits an llvm.experimental.deoptimize and terminates the current block.
 ///
@@ -121,6 +140,14 @@ inline bool getUIntFnAttr(const CallBase &CB, StringRef Name, uint64_t &Out) {
     return false;
   return parseUInt(A.getValueAsString(), Out);
 }
+
+/// Reads the current bytecode index from a deoptimization operand bundle.
+int getCurrentDeoptBCI(const CallBase &CB);
+
+/// Reads the Java method for the call site's inline scope.
+/// Calls without inline-scope metadata belong to \p RootMethod.
+uintptr_t getInlineScopeJavaMethod(const CallBase &CB, uintptr_t RootMethod,
+                                   ArrayRef<Function *> InlineScopeCallers);
 
 /// Compute the pre called deoptimization operand bundle for a Java invoke.
 ///

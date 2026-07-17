@@ -38,6 +38,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Jeandle/CHADevirtualization.h"
+#include "llvm/Transforms/Jeandle/ProfileDevirtualization.h"
 #include "llvm/Transforms/Jeandle/JavaOperationLower.h"
 #include "llvm/Transforms/Jeandle/RepeatedConstantFolding.h"
 #include "llvm/Transforms/Jeandle/TypeCheckElimination.h"
@@ -201,7 +202,6 @@ PreservedAnalyses JeandleInlineDriver::run(Module &M,
   } ReplayScope(M);
 
   JeandleInliner Inliner(InlineAccessorsOnly);
-  CHADevirtualization Devirtualization;
   SmallVector<JeandleInlineScope, 16> InlineScopes;
   PreservedAnalyses DriverPA = PreservedAnalyses::all();
   Function *RootFunction = getRootJavaMethodFunction(M);
@@ -258,12 +258,23 @@ PreservedAnalyses JeandleInlineDriver::run(Module &M,
 
     FunctionAnalysisManager &FAM =
         MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+    SmallVector<Function *, 16> InlineScopeCallers;
+    InlineScopeCallers.reserve(InlineScopes.size());
+    for (const JeandleInlineScope &Scope : InlineScopes)
+      InlineScopeCallers.push_back(Scope.first);
+    CHADevirtualization Devirtualization(InlineScopeCallers);
+    ProfileDevirtualization ProfileDevirt(InlineScopeCallers);
     PreservedAnalyses DevirtPA = Devirtualization.run(*RootFunction, FAM);
-    bool AddedMonomorphicTargets = !DevirtPA.areAllPreserved();
+    PreservedAnalyses ProfileDevirtPA =
+        ProfileDevirt.run(*RootFunction, FAM);
+    bool AddedMonomorphicTargets =
+        !DevirtPA.areAllPreserved() || !ProfileDevirtPA.areAllPreserved();
     Changed |= AddedMonomorphicTargets;
     FAM.invalidate(*RootFunction, DevirtPA);
+    FAM.invalidate(*RootFunction, ProfileDevirtPA);
     PreservedAnalyses DevirtModulePA = PreservedAnalyses::all();
     DevirtModulePA.intersect(std::move(DevirtPA));
+    DevirtModulePA.intersect(std::move(ProfileDevirtPA));
     DevirtModulePA.preserveSet<AllAnalysesOn<Function>>();
     DevirtModulePA.preserve<FunctionAnalysisManagerModuleProxy>();
     updateDriverPreservedAnalyses(M, MAM, DriverPA, std::move(DevirtModulePA));

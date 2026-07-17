@@ -154,6 +154,9 @@ enum class JeandleInlineReason : int {
   def(GetOopKlass, uintptr_t, Uintptr,                                           \
       (int a1), (a1),                                                            \
       (VMCallbackValueType::Int), 1)                                             \
+  def(GetJavaMethodName, std::string, String,                                    \
+      (uintptr_t a1), (a1),                                                      \
+      (VMCallbackValueType::Uintptr), 1)                                         \
   def(IsOkToInline, bool, Bool,                                                  \
       (int a1, int a2, uintptr_t a3), (a1, a2, a3),                              \
       (VMCallbackValueType::Int, VMCallbackValueType::Int,                       \
@@ -176,6 +179,12 @@ enum class JeandleInlineReason : int {
       (VMCallbackValueType::Uintptr, VMCallbackValueType::Uintptr,               \
        VMCallbackValueType::Uintptr, VMCallbackValueType::Uintptr,               \
        VMCallbackValueType::Bool, VMCallbackValueType::Int), 6)                  \
+  def(GetProfileDevirtInfo, std::string, String,                                 \
+      (uintptr_t a1, uintptr_t a2, uintptr_t a3, int a4, int a5),                \
+      (a1, a2, a3, a4, a5),                                                      \
+      (VMCallbackValueType::Uintptr, VMCallbackValueType::Uintptr,               \
+       VMCallbackValueType::Uintptr, VMCallbackValueType::Int,                   \
+       VMCallbackValueType::Int), 5)                                             \
   def(UpdateToStaticOptVirtualCall, bool, Bool,                                  \
       (int64_t a1), (a1),                                                        \
       (VMCallbackValueType::Long), 1)
@@ -224,6 +233,8 @@ enum class JeandleInlineReason : int {
 ///   GetOopKlass         — Returns the actual runtime klass pointer of the
 ///                         constant oop with the given oop id, or 0 if it is
 ///                         unavailable. Pure (id -> klass).
+///   GetJavaMethodName   — Returns the LLVM function name for a Java method
+///                         pointer.
 ///   IsOkToInline        — Given an inline scope id, call-site BCI, and callee
 ///                         Java method pointer, returns whether the VM allows
 ///                         this inline attempt.
@@ -255,6 +266,11 @@ enum class JeandleInlineReason : int {
 ///                         devirtualization, or 0 if the call site cannot
 ///                         be optimized. The JVM implementation also keeps
 ///                         CallSiteInfo in sync for normal compilation.
+///   GetProfileDevirtInfo
+///                       — Returns up to two exact receiver classes and their
+///                         independently resolved profile-guided targets for a
+///                         virtual call site, or empty if it should stay
+///                         virtual.
 ///   UpdateToStaticOptVirtualCall
 ///                       — Updates the call site to a static opt virtual call.
 ///                         This callback has side effects on jvm side.

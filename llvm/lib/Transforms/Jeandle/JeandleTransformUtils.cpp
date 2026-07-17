@@ -17,6 +17,53 @@
 
 namespace llvm {
 
+int getStaticCallPatchSize(const Module &M) {
+  NamedMDNode *NMD =
+      M.getNamedMetadata(jeandle::Metadata::StaticCallPatchSize);
+  assert(NMD && NMD->getNumOperands() == 1 &&
+         "expected patch size metadata");
+  MDNode *PatchNode = NMD->getOperand(0);
+  assert(PatchNode && PatchNode->getNumOperands() == 1 &&
+         "expected one patch size operand");
+  return mdconst::extract<ConstantInt>(PatchNode->getOperand(0))
+      ->getSExtValue();
+}
+
+void updateStaticOptVirtualCallAttrs(InvokeInst &CB, int PatchSize,
+                                     bool MarkMonomorphicTarget) {
+  CB.removeFnAttr(jeandle::Attribute::StatepointNumPatchBytes);
+  CB.addFnAttr(Attribute::get(CB.getContext(),
+                              jeandle::Attribute::StatepointNumPatchBytes,
+                              std::to_string(PatchSize)));
+  CB.removeFnAttr(jeandle::Attribute::CallStub);
+  CB.addFnAttr(Attribute::get(CB.getContext(), jeandle::Attribute::CallStub,
+                              "opt_virtual_call"));
+  if (MarkMonomorphicTarget)
+    CB.addFnAttr(
+        Attribute::get(CB.getContext(), jeandle::Attribute::MonomorphicTarget));
+  else
+    CB.removeFnAttr(jeandle::Attribute::MonomorphicTarget);
+}
+
+void setStatepointID(CallBase &CB, uint64_t StatepointID) {
+  CB.removeFnAttr(jeandle::Attribute::StatepointID);
+  CB.addFnAttr(Attribute::get(CB.getContext(), jeandle::Attribute::StatepointID,
+                              std::to_string(StatepointID)));
+}
+
+[[noreturn]] void reportInvalidStatepointID(const CallBase &CB,
+                                            StringRef Component,
+                                            StringRef Reason) {
+  std::string Message;
+  raw_string_ostream OS(Message);
+  OS << Component << ": " << Reason;
+  if (const Function *Caller = CB.getCaller())
+    OS << " in " << Caller->getName();
+  OS << ": " << CB;
+  OS.flush();
+  report_fatal_error(StringRef(Message));
+}
+
 namespace {
 
 struct DeoptScopeInfo {
@@ -58,6 +105,36 @@ DeoptScopeInfo findCurrentDeoptScope(const CallBase &CB) {
 }
 
 } // namespace
+
+int getCurrentDeoptBCI(const CallBase &CB) {
+  return findCurrentDeoptScope(CB).BCI;
+}
+
+uintptr_t getInlineScopeJavaMethod(const CallBase &CB, uintptr_t RootMethod,
+                                   ArrayRef<Function *> InlineScopeCallers) {
+  MDNode *MD = CB.getMetadata(jeandle::Metadata::InlineScopeID);
+  if (!MD)
+    return RootMethod;
+  if (MD->getNumOperands() != 1)
+    reportInvalidDeoptBundle(CB, "invalid inline-scope-id metadata");
+  auto *ScopeIDMD = dyn_cast_or_null<ConstantAsMetadata>(MD->getOperand(0));
+  auto *ScopeID =
+      ScopeIDMD ? dyn_cast<ConstantInt>(ScopeIDMD->getValue()) : nullptr;
+  if (!ScopeID || !ScopeID->getType()->isIntegerTy(32))
+    reportInvalidDeoptBundle(CB, "invalid inline-scope-id metadata");
+
+  int64_t ID = ScopeID->getSExtValue();
+  if (ID < 0)
+    return RootMethod;
+  if (static_cast<uint64_t>(ID) >= InlineScopeCallers.size() ||
+      !InlineScopeCallers[ID])
+    reportInvalidDeoptBundle(CB, "inline-scope-id is out of range");
+
+  uintptr_t Method = 0;
+  if (!getFunctionJavaMethod(*InlineScopeCallers[ID], Method))
+    reportInvalidDeoptBundle(CB, "inline scope has no Java method");
+  return Method;
+}
 
 static Function *getDeoptimizeCallee(Module &M, Type *RetTy) {
   Function *DeoptDecl = Intrinsic::getOrInsertDeclaration(

@@ -40,7 +40,7 @@ unwind:
 ; CHECK-SAME: [ "deopt"(
 ; CHECK: declare hotspotcc i32 @Optimized_target(ptr addrspace(1)) #[[TARGETATTR:[0-9]+]] gc "hotspotgc"
 ; CHECK: attributes #[[TARGETATTR]] = { "java-method"="700" }
-; CHECK: attributes #[[CALLATTR]] = { {{.*}}"monomorphic-target"{{.*}}"statepoint-num-patch-bytes"="5"{{.*}} }
+; CHECK: attributes #[[CALLATTR]] = { {{.*}}"call-stub"="opt_virtual_call"{{.*}}"monomorphic-target"{{.*}}"statepoint-num-patch-bytes"="5"{{.*}} }
 
 attributes #0 = { "java-method"="100" }
 attributes #1 = { "java-method"="200" }

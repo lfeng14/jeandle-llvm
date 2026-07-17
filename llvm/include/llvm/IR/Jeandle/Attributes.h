@@ -44,9 +44,15 @@ public:
   /// Call-site attributes attached to java call(InvokeInsts).
   static constexpr const char *Bytecode = "bytecode";
 
+  static constexpr const char *CallStub = "call-stub";
+
   static constexpr const char *DeclaredHolder = "declared-holder";
 
   static constexpr const char *MonomorphicTarget = "monomorphic-target";
+
+  /// Marks virtual fallback calls that must not be profile-devirtualized again.
+  static constexpr const char *ProfileDevirtualizationMiss =
+      "profile-devirtualization-miss";
 };
 
 } // namespace llvm::jeandle

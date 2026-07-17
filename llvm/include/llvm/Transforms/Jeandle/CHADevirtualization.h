@@ -11,6 +11,7 @@
 #ifndef LLVM_CHA_DEVIRTUALIZATION_H
 #define LLVM_CHA_DEVIRTUALIZATION_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/IR/Jeandle/Deoptimization.h"
 #include "llvm/IR/PassManager.h"
 
@@ -64,11 +65,13 @@ struct CHAOptInfo {
 
 class CHADevirtualization : public PassInfoMixin<CHADevirtualization> {
 public:
-  CHADevirtualization() {}
+  explicit CHADevirtualization(ArrayRef<Function *> InlineScopeCallers = {})
+      : InlineScopeCallers(InlineScopeCallers) {}
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM);
 
 private:
   int PatchSize = 0;
+  ArrayRef<Function *> InlineScopeCallers;
 };
 
 } // namespace llvm

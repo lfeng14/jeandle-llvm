@@ -19,6 +19,7 @@
 #include "llvm/Transforms/Jeandle/JavaOperationLower.h"
 #include "llvm/Transforms/Jeandle/JeandleInliner.h"
 #include "llvm/Transforms/Jeandle/JeandleNarrowOopMarker.h"
+#include "llvm/Transforms/Jeandle/ProfileDevirtualization.h"
 #include "llvm/Transforms/Jeandle/RepeatedConstantFolding.h"
 #include "llvm/Transforms/Jeandle/TLSPointerRewrite.h"
 #include "llvm/Transforms/Jeandle/TypeCheckElimination.h"
@@ -63,6 +64,7 @@ ModulePassManager Pipeline::buildJeandlePipeline(PassBuilder &PB,
   PreCHACleanup.addPass(ADCEPass());
   PM.addPass(createModuleToFunctionPassAdaptor(std::move(PreCHACleanup)));
   PM.addPass(createModuleToFunctionPassAdaptor(CHADevirtualization()));
+  PM.addPass(createModuleToFunctionPassAdaptor(ProfileDevirtualization()));
   // JeandleInlineDriver owns the inline-specific loop. Devirtualization
   // refinement between inline rounds should be wired inside the driver so
   // inline-scope state can be preserved across IR rewrites.
