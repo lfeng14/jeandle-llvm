@@ -32,6 +32,10 @@ public:
 
   static constexpr const char *JavaKlassExact = "java-klass-exact";
 
+  /// Marks a call argument that remains live for the HotSpot runtime ABI even
+  /// when the visible LLVM callee does not use the corresponding parameter.
+  static constexpr const char *RuntimeLive = "runtime-live";
+
   /// Call-site attributes attached to CallBase instructions.
   ///
   /// Java bytecode invokes are emitted as InvokeInsts, while VM calls may use
@@ -47,6 +51,10 @@ public:
   static constexpr const char *DeclaredHolder = "declared-holder";
 
   static constexpr const char *MonomorphicTarget = "monomorphic-target";
+
+  /// Marks virtual fallback calls that must not be profile-devirtualized again.
+  static constexpr const char *ProfileDevirtualizationMiss =
+      "profile-devirtualization-miss";
 };
 
 } // namespace llvm::jeandle

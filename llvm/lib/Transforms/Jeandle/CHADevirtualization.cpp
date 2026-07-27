@@ -51,32 +51,6 @@ using namespace llvm;
 
 namespace {
 
-int getDeoptBCI(const InvokeInst &CB) {
-  std::optional<OperandBundleUse> Deopt =
-      CB.getOperandBundle(LLVMContext::OB_deopt);
-  auto *BCI = dyn_cast<ConstantInt>(Deopt->Inputs[0].get());
-  return static_cast<int>(BCI->getSExtValue());
-}
-
-int getPatchSize(const Module *M) {
-  NamedMDNode *NMD =
-      M->getNamedMetadata(jeandle::Metadata::StaticCallPatchSize);
-  assert(NMD && NMD->getNumOperands() == 1 && "expected patch size metadata");
-  MDNode *PatchNode = NMD->getOperand(0);
-  assert(PatchNode && PatchNode->getNumOperands() == 1 && "must be");
-  return mdconst::extract<ConstantInt>(PatchNode->getOperand(0))
-      ->getSExtValue();
-}
-
-void updateStaticOptVirtualCallAttrs(InvokeInst &CB, int PatchSize) {
-  CB.removeFnAttr(jeandle::Attribute::StatepointNumPatchBytes);
-  CB.addFnAttr(Attribute::get(CB.getContext(),
-                              jeandle::Attribute::StatepointNumPatchBytes,
-                              std::to_string(PatchSize)));
-  CB.addFnAttr(
-      Attribute::get(CB.getContext(), jeandle::Attribute::MonomorphicTarget));
-}
-
 bool optimizeCallSite(InvokeInst &CB, DominatorTree &DT, DomTreeUpdater &DTU,
                       const jeandle::VMCallbacks &Callbacks, uintptr_t Caller,
                       int PatchSize) {
@@ -114,13 +88,20 @@ bool optimizeCallSite(InvokeInst &CB, DominatorTree &DT, DomTreeUpdater &DTU,
 
   jeandle::JavaType ReceiverType = jeandle::getJavaType(Receiver, &DT, &CB);
 
+  uintptr_t ScopeCaller = getCurrentDeoptMethod(CB, Caller);
   auto CHAOptInfo = jeandle::CHAOptInfo::decode(
-      Callbacks.GetCHAOptInfo(Caller, Callee, Holder, ReceiverType.Klass,
+      Callbacks.GetCHAOptInfo(ScopeCaller, Callee, Holder, ReceiverType.Klass,
                               ReceiverType.Exact, InvokeKind));
   if (CHAOptInfo.Constraint == 0)
     return false;
 
-  int BCI = getDeoptBCI(CB);
+  Function *Func = getOrInsertJavaMethodFunction(
+      *CB.getModule(), CHAOptInfo.MethodName, CB.getFunctionType(),
+      CHAOptInfo.Method);
+  if (!Func)
+    return false;
+
+  int BCI = getCurrentDeoptBCI(CB);
   std::string Prefix = "bci_cha_" + std::to_string(BCI);
 
   std::optional<OperandBundleDef> PreCallDeopt = createPreCallDeoptBundle(CB);
@@ -136,9 +117,7 @@ bool optimizeCallSite(InvokeInst &CB, DominatorTree &DT, DomTreeUpdater &DTU,
                   jeandle::Deoptimization::Action_none, *PreCallDeopt);
 
   updateStaticOptVirtualCallAttrs(CB, PatchSize);
-  CB.setCalledFunction(CB.getModule()->getOrInsertFunction(
-      CHAOptInfo.MethodName, CB.getFunctionType()));
-  llvm::Function *Func = CB.getCalledFunction();
+  CB.setCalledFunction(Func);
   Func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   Func->setGC(llvm::jeandle::JeandleGC);
   Func->addFnAttr(llvm::Attribute::get(CB.getContext(),
@@ -177,7 +156,8 @@ PreservedAnalyses CHADevirtualization::run(Function &F,
 
   bool Changed = false;
   uintptr_t Caller = 0;
-  PatchSize = PatchSize == 0 ? getPatchSize(F.getParent()) : PatchSize;
+  PatchSize =
+      PatchSize == 0 ? getStaticCallPatchSize(*F.getParent()) : PatchSize;
   getFunctionJavaMethod(F, Caller);
   for (InvokeInst *CB : Calls)
     Changed |= optimizeCallSite(*CB, DT, DTU, *Callbacks, Caller, PatchSize);
