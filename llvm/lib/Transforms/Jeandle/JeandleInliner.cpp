@@ -573,7 +573,8 @@ InlineRoundResult JeandleInliner::runInlineRound(
       // operations, while an inlined callee forwards unwind edges to the
       // caller's landingpad. Mark root callees noinline so later LLVM inline
       // passes cannot inline them either.
-      if (NewCallee && isEligibleInlineCallee(*NewCallee, InlineAccessorsOnly) &&
+      if (NewCallee &&
+          isEligibleInlineCallee(*NewCallee, InlineAccessorsOnly) &&
           getJavaMethodPointer(*NewCallee) == RootMethod) {
         NewCB->setIsNoInline();
         continue;

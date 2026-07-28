@@ -42,8 +42,7 @@ struct ProfileDevirtualizationInfo {
   std::string TargetMethodName2;
 
   bool isValid() const {
-    return ReceiverKlass != 0 && TargetMethod != 0 &&
-           !TargetMethodName.empty();
+    return ReceiverKlass != 0 && TargetMethod != 0 && !TargetMethodName.empty();
   }
 
   bool isBimorphic() const { return ReceiverKlass2 != 0; }
@@ -113,8 +112,7 @@ struct ProfileDevirtualizationInfo {
     uint64_t DeoptimizeOnMissValue = 0;
     if (!ParseUIntPtr(0, Info.ReceiverKlass) ||
         !ParseUIntPtr(1, Info.TargetMethod) || !ParseUInt64(2, Info.Count) ||
-        !ParseUInt64(3, Info.TotalCount) ||
-        !ParseUInt64(4, DeoptReasonValue) ||
+        !ParseUInt64(3, Info.TotalCount) || !ParseUInt64(4, DeoptReasonValue) ||
         !ParseUInt64(5, DeoptimizeOnMissValue) ||
         !ParseUIntPtr(6, Info.ReceiverKlass2) ||
         !ParseUIntPtr(7, Info.TargetMethod2) || !ParseUInt64(8, Info.Count2) ||
@@ -130,8 +128,7 @@ struct ProfileDevirtualizationInfo {
     Info.DeoptReason =
         static_cast<Deoptimization::DeoptReason>(DeoptReasonValue);
     Info.DeoptimizeOnMiss = DeoptimizeOnMissValue != 0;
-    if (!Info.isValid() ||
-        (Info.isBimorphic() != (Info.TargetMethod2 != 0)) ||
+    if (!Info.isValid() || (Info.isBimorphic() != (Info.TargetMethod2 != 0)) ||
         (Info.isBimorphic() != !Info.TargetMethodName2.empty()))
       return {};
     return Info;

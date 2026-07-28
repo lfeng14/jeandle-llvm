@@ -43,7 +43,7 @@ std::optional<JavaVirtualCallSite> getJavaVirtualCallSite(InvokeInst &CB) {
   CallSite.InvokeKind = InvokeKind;
   if (!getFunctionJavaMethod(*Callee, CallSite.CalleeMethod) ||
       !getUIntPtrFnAttr(CB, jeandle::Attribute::DeclaredHolder,
-                       CallSite.DeclaredHolder) ||
+                        CallSite.DeclaredHolder) ||
       !getUIntFnAttr(CB, jeandle::Attribute::StatepointID,
                      CallSite.StatepointID) ||
       CallSite.StatepointID > std::numeric_limits<uint32_t>::max())
@@ -52,10 +52,8 @@ std::optional<JavaVirtualCallSite> getJavaVirtualCallSite(InvokeInst &CB) {
 }
 
 int getStaticCallPatchSize(const Module &M) {
-  NamedMDNode *NMD =
-      M.getNamedMetadata(jeandle::Metadata::StaticCallPatchSize);
-  assert(NMD && NMD->getNumOperands() == 1 &&
-         "expected patch size metadata");
+  NamedMDNode *NMD = M.getNamedMetadata(jeandle::Metadata::StaticCallPatchSize);
+  assert(NMD && NMD->getNumOperands() == 1 && "expected patch size metadata");
   MDNode *PatchNode = NMD->getOperand(0);
   assert(PatchNode && PatchNode->getNumOperands() == 1 &&
          "expected one patch size operand");
@@ -74,16 +72,14 @@ bool canGetOrInsertJavaMethodFunction(const Module &M, StringRef Name,
 }
 
 Function *getOrInsertJavaMethodFunction(Module &M, StringRef Name,
-                                        FunctionType *Type,
-                                        uintptr_t Method) {
+                                        FunctionType *Type, uintptr_t Method) {
   if (!canGetOrInsertJavaMethodFunction(M, Name, Type, Method))
     return nullptr;
 
   Function *F = M.getFunction(Name);
   if (!F) {
     F = Function::Create(Type, GlobalValue::ExternalLinkage, Name, M);
-    F->addFnAttr(Attribute::get(M.getContext(),
-                                jeandle::Attribute::JavaMethod,
+    F->addFnAttr(Attribute::get(M.getContext(), jeandle::Attribute::JavaMethod,
                                 std::to_string(Method)));
   }
   F->setCallingConv(CallingConv::Hotspot_JIT);
@@ -270,14 +266,14 @@ uintptr_t getCurrentDeoptMethod(const CallBase &CB, uintptr_t RootMethod) {
   };
 
   // Legacy inlinee layout: method marker, method, bci, bci.
-  if (uintptr_t Method = DecodeMethod(Scope.BCIPairStart - 2,
-                                      Scope.BCIPairStart - 1))
+  if (uintptr_t Method =
+          DecodeMethod(Scope.BCIPairStart - 2, Scope.BCIPairStart - 1))
     return Method;
 
   // Current inlinee layout: method marker, method, should-reexecute, bci, bci.
   if (Scope.BCIPairStart >= 3) {
-    if (uintptr_t Method = DecodeMethod(Scope.BCIPairStart - 3,
-                                        Scope.BCIPairStart - 2))
+    if (uintptr_t Method =
+            DecodeMethod(Scope.BCIPairStart - 3, Scope.BCIPairStart - 2))
       return Method;
   }
 

@@ -73,17 +73,18 @@ void setBranchWeights(BranchInst &Branch, uint64_t TakenCount,
 /// Clones a Java invoke onto a newly created path and gives the clone a unique
 /// statepoint id. The original call-site attributes and deopt state are kept so
 /// code generation can describe the same Java frame on every path.
-InvokeInst *cloneInvokeWithFreshStatepoint(
-    InvokeInst &CB, BasicBlock &InsertBlock, BasicBlock *NormalDest,
-    const jeandle::VMCallbacks &Callbacks, uint64_t StatepointID,
-    bool MarkProfileMiss) {
+InvokeInst *
+cloneInvokeWithFreshStatepoint(InvokeInst &CB, BasicBlock &InsertBlock,
+                               BasicBlock *NormalDest,
+                               const jeandle::VMCallbacks &Callbacks,
+                               uint64_t StatepointID, bool MarkProfileMiss) {
   SmallVector<Value *, 8> Args(CB.args());
   SmallVector<OperandBundleDef, 4> Bundles;
   CB.getOperandBundlesAsDefs(Bundles);
 
   IRBuilder<> Builder(&InsertBlock);
-  InvokeInst *Clone = Builder.CreateInvoke(
-      CB.getCalledFunction(), NormalDest, CB.getUnwindDest(), Args, Bundles);
+  InvokeInst *Clone = Builder.CreateInvoke(CB.getCalledFunction(), NormalDest,
+                                           CB.getUnwindDest(), Args, Bundles);
   Clone->setCallingConv(CB.getCallingConv());
   Clone->setAttributes(CB.getAttributes());
   Clone->copyMetadata(CB);
@@ -94,9 +95,8 @@ InvokeInst *cloneInvokeWithFreshStatepoint(
   int64_t NewStatepointID =
       Callbacks.GetNewStatepointID(static_cast<int64_t>(StatepointID));
   if (NewStatepointID < 0)
-    reportInvalidStatepointID(
-        CB, "ProfileDevirtualization",
-        "GetNewStatepointID returned a negative id");
+    reportInvalidStatepointID(CB, "ProfileDevirtualization",
+                              "GetNewStatepointID returned a negative id");
   setStatepointID(*Clone, static_cast<uint64_t>(NewStatepointID));
   return Clone;
 }
@@ -120,9 +120,9 @@ void createVirtualMissPath(InvokeInst &CB, BasicBlock *MissBlock,
   CB.setNormalDest(JoinBlock);
 
   // Prevent a later refinement round from guarding this fallback again.
-  InvokeInst *Miss = cloneInvokeWithFreshStatepoint(
-      CB, *MissBlock, JoinBlock, Callbacks, StatepointID,
-      /*MarkProfileMiss=*/true);
+  InvokeInst *Miss = cloneInvokeWithFreshStatepoint(CB, *MissBlock, JoinBlock,
+                                                    Callbacks, StatepointID,
+                                                    /*MarkProfileMiss=*/true);
 
   for (PHINode &Phi : UnwindDest->phis()) {
     int HitIndex = Phi.getBasicBlockIndex(HitBlock);
@@ -216,14 +216,14 @@ BimorphicCheckBlocks insertBimorphicReceiverChecks(
          "exact receiver check intrinsics must be present");
 
   LLVMContext &Context = Inst.getContext();
-  BasicBlock *FirstHitBlock = SplitBlock(
-      BB, &Inst, &DTU, nullptr, nullptr, Prefix + "_exact_receiver_0_pass");
-  BasicBlock *SecondCheckBlock = BasicBlock::Create(
-      Context, Prefix + "_exact_receiver_1_check", BB->getParent(),
-      FirstHitBlock);
-  BasicBlock *SecondHitBlock = BasicBlock::Create(
-      Context, Prefix + "_exact_receiver_1_pass", BB->getParent(),
-      FirstHitBlock);
+  BasicBlock *FirstHitBlock = SplitBlock(BB, &Inst, &DTU, nullptr, nullptr,
+                                         Prefix + "_exact_receiver_0_pass");
+  BasicBlock *SecondCheckBlock =
+      BasicBlock::Create(Context, Prefix + "_exact_receiver_1_check",
+                         BB->getParent(), FirstHitBlock);
+  BasicBlock *SecondHitBlock =
+      BasicBlock::Create(Context, Prefix + "_exact_receiver_1_pass",
+                         BB->getParent(), FirstHitBlock);
   BasicBlock *MissBlock = BasicBlock::Create(
       Context, Prefix + "_exact_receiver_fail", BB->getParent(), FirstHitBlock);
 
@@ -249,8 +249,8 @@ BimorphicCheckBlocks insertBimorphicReceiverChecks(
   CallInst *IsReceiver2 = SecondBuilder.CreateCall(
       CheckExactKlassFn, {ExpectedKlass2, ActualKlass}, Prefix + "_is_exact_1");
   IsReceiver2->setCallingConv(CallingConv::Hotspot_JIT);
-  BranchInst *SecondGuard = SecondBuilder.CreateCondBr(
-      IsReceiver2, SecondHitBlock, MissBlock);
+  BranchInst *SecondGuard =
+      SecondBuilder.CreateCondBr(IsReceiver2, SecondHitBlock, MissBlock);
   uint64_t RemainingCount =
       ProfileTotalCount > ProfileCount ? ProfileTotalCount - ProfileCount : 1;
   setBranchWeights(*SecondGuard, ProfileCount2, RemainingCount);
@@ -290,9 +290,9 @@ InvokeInst *createBimorphicCallPaths(InvokeInst &CB,
 
   InvokeInst *MissCall = nullptr;
   if (CreateVirtualMiss)
-    MissCall = cloneInvokeWithFreshStatepoint(
-        CB, *Blocks.MissBlock, JoinBlock, Callbacks, StatepointID,
-        /*MarkProfileMiss=*/true);
+    MissCall = cloneInvokeWithFreshStatepoint(CB, *Blocks.MissBlock, JoinBlock,
+                                              Callbacks, StatepointID,
+                                              /*MarkProfileMiss=*/true);
 
   for (PHINode &Phi : UnwindDest->phis()) {
     int FirstHitIndex = Phi.getBasicBlockIndex(FirstHitBlock);
@@ -363,8 +363,8 @@ bool optimizeCallSite(InvokeInst &CB, DomTreeUpdater &DTU,
 
   Module &M = *CB.getModule();
   FunctionType *CallType = CB.getFunctionType();
-  if (!canGetOrInsertJavaMethodFunction(
-          M, OptInfo.TargetMethodName, CallType, OptInfo.TargetMethod) ||
+  if (!canGetOrInsertJavaMethodFunction(M, OptInfo.TargetMethodName, CallType,
+                                        OptInfo.TargetMethod) ||
       (IsBimorphic &&
        !canGetOrInsertJavaMethodFunction(M, OptInfo.TargetMethodName2, CallType,
                                          OptInfo.TargetMethod2)) ||
@@ -393,9 +393,9 @@ bool optimizeCallSite(InvokeInst &CB, DomTreeUpdater &DTU,
         CB, CallSite->Receiver, OptInfo.ReceiverKlass, OptInfo.Count,
         OptInfo.ReceiverKlass2, OptInfo.Count2, OptInfo.TotalCount, Prefix,
         DTU);
-    SecondHitCall = createBimorphicCallPaths(
-        CB, Blocks, Callbacks, CallSite->StatepointID,
-        !OptInfo.DeoptimizeOnMiss, DTU);
+    SecondHitCall =
+        createBimorphicCallPaths(CB, Blocks, Callbacks, CallSite->StatepointID,
+                                 !OptInfo.DeoptimizeOnMiss, DTU);
     if (OptInfo.DeoptimizeOnMiss) {
       IRBuilder<> MissBuilder(Blocks.MissBlock);
       buildDeoptimize(MissBuilder, *CB.getModule(), OptInfo.DeoptReason,
@@ -417,8 +417,7 @@ bool optimizeCallSite(InvokeInst &CB, DomTreeUpdater &DTU,
     }
   }
 
-  updateStaticOptVirtualCallAttrs(CB, PatchSize,
-                                  EnableProfileDevirtInlining);
+  updateStaticOptVirtualCallAttrs(CB, PatchSize, EnableProfileDevirtInlining);
   CB.setCalledFunction(Func);
 
   if (SecondHitCall) {

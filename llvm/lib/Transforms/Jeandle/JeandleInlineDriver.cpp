@@ -40,6 +40,7 @@
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Jeandle/CHADevirtualization.h"
 #include "llvm/Transforms/Jeandle/JavaOperationLower.h"
+#include "llvm/Transforms/Jeandle/ProfileDevirtualization.h"
 #include "llvm/Transforms/Jeandle/RecoverTypeInfo.h"
 #include "llvm/Transforms/Jeandle/RepeatedConstantFolding.h"
 #include "llvm/Transforms/Jeandle/TypeCheckElimination.h"
@@ -47,7 +48,6 @@
 #include "llvm/Transforms/Scalar/EarlyCSE.h"
 #include "llvm/Transforms/Scalar/InstSimplifyPass.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
-#include "llvm/Transforms/Jeandle/ProfileDevirtualization.h"
 
 #include <string>
 #include <utility>
@@ -243,8 +243,7 @@ PreservedAnalyses JeandleInlineDriver::run(Module &M,
     FunctionAnalysisManager &FAM =
         MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
     PreservedAnalyses DevirtPA = Devirtualization.run(*RootFunction, FAM);
-    PreservedAnalyses ProfileDevirtPA =
-        ProfileDevirt.run(*RootFunction, FAM);
+    PreservedAnalyses ProfileDevirtPA = ProfileDevirt.run(*RootFunction, FAM);
     bool AddedMonomorphicTargets =
         !DevirtPA.areAllPreserved() || !ProfileDevirtPA.areAllPreserved();
     Changed |= AddedMonomorphicTargets;

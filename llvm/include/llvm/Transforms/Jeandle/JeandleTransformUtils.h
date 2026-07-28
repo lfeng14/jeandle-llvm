@@ -145,8 +145,7 @@ inline bool getFunctionJavaMethod(const Function &F, uintptr_t &Method) {
 /// \returns A compatible function whose JavaMethod attribute equals \p Method,
 /// or nullptr when \p Name is already owned by another Java method/signature.
 Function *getOrInsertJavaMethodFunction(Module &M, StringRef Name,
-                                        FunctionType *Type,
-                                        uintptr_t Method);
+                                        FunctionType *Type, uintptr_t Method);
 
 /// Checks whether getOrInsertJavaMethodFunction can use p Name without
 /// mutating the module. This lets multi-target transforms validate every name

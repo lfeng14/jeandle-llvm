@@ -62,16 +62,15 @@ bool optimizeCallSite(InvokeInst &CB, DominatorTree &DT, DomTreeUpdater &DTU,
       jeandle::getJavaType(CallSite->Receiver, &DT, &CB);
 
   uintptr_t ScopeCaller = getCurrentDeoptMethod(CB, Caller);
-  auto CHAOptInfo = jeandle::CHAOptInfo::decode(
-      Callbacks.GetCHAOptInfo(ScopeCaller, CallSite->CalleeMethod,
-                              CallSite->DeclaredHolder, ReceiverType.Klass,
-                              ReceiverType.Exact, CallSite->InvokeKind));
+  auto CHAOptInfo = jeandle::CHAOptInfo::decode(Callbacks.GetCHAOptInfo(
+      ScopeCaller, CallSite->CalleeMethod, CallSite->DeclaredHolder,
+      ReceiverType.Klass, ReceiverType.Exact, CallSite->InvokeKind));
   if (CHAOptInfo.Constraint == 0)
     return false;
 
-  Function *Func = getOrInsertJavaMethodFunction(
-      *CB.getModule(), CHAOptInfo.MethodName, CB.getFunctionType(),
-      CHAOptInfo.Method);
+  Function *Func =
+      getOrInsertJavaMethodFunction(*CB.getModule(), CHAOptInfo.MethodName,
+                                    CB.getFunctionType(), CHAOptInfo.Method);
   if (!Func)
     return false;
 
@@ -80,9 +79,8 @@ bool optimizeCallSite(InvokeInst &CB, DominatorTree &DT, DomTreeUpdater &DTU,
 
   OperandBundleDef PreCallDeopt = createPreCallDeoptBundle(CB);
 
-  BasicBlock *CheckInstanceofFail =
-      insertCheckInstanceOf(CB, CallSite->Receiver, CHAOptInfo.Constraint,
-                            Prefix, &DTU);
+  BasicBlock *CheckInstanceofFail = insertCheckInstanceOf(
+      CB, CallSite->Receiver, CHAOptInfo.Constraint, Prefix, &DTU);
   assert(CheckInstanceofFail && "failed to insert check_instanceof");
 
   IRBuilder<> BuilderFail(CheckInstanceofFail);

@@ -502,8 +502,7 @@ static ExactKlassGuard traceExactKlassGuard(Value *Cond, Value *QueryObj) {
       CB->arg_size() != 2)
     return {};
 
-  Value *ActualKlass =
-      CB->getArgOperand(1)->stripPointerCastsAndAliases();
+  Value *ActualKlass = CB->getArgOperand(1)->stripPointerCastsAndAliases();
   auto *LoadCB = dyn_cast<CallBase>(ActualKlass);
   Function *LoadCallee = LoadCB ? LoadCB->getCalledFunction() : nullptr;
   if (!LoadCallee || LoadCallee->getName() != "jeandle.load_klass" ||
@@ -1026,9 +1025,8 @@ static JavaType sharpenFromDominators(Value *V, Instruction *Context,
     ExactKlassGuard Exact = traceExactKlassGuard(BI->getCondition(), V);
     if (Exact.matched()) {
       if (DT.dominates(TrueEdge, CheckBB)) {
-        LLVM_DEBUG(dbgs() << "JavaType: sharpened " << *V
-                          << " to exact klass " << Exact.Klass
-                          << " from dominating klass guard in "
+        LLVM_DEBUG(dbgs() << "JavaType: sharpened " << *V << " to exact klass "
+                          << Exact.Klass << " from dominating klass guard in "
                           << BB->getName() << "\n");
         JavaType ExactType;
         ExactType.Klass = Exact.Klass;
