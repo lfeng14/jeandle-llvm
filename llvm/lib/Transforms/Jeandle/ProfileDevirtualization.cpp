@@ -7,6 +7,14 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// The VM callback owns receiver-profile policy and returns resolved target
+// methods. This pass owns the IR rewrite: it inserts exact-klass guards,
+// creates deopt or virtual fallback paths, and turns successful paths into
+// optimized-virtual calls while keeping statepoint and dominator information
+// consistent.
+//
+//===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Jeandle/ProfileDevirtualization.h"
 
@@ -19,9 +27,8 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Jeandle/Attributes.h"
-#include "llvm/IR/Jeandle/GCStrategy.h"
-#include "llvm/IR/Jeandle/InvokeType.h"
 #include "llvm/IR/Jeandle/Metadata.h"
+#include "llvm/IR/Jeandle/ProfileDevirtualizationInfo.h"
 #include "llvm/IR/Jeandle/VMCallback.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
@@ -63,13 +70,40 @@ void setBranchWeights(BranchInst &Branch, uint64_t TakenCount,
                               static_cast<uint32_t>(NotTakenWeight)));
 }
 
-void createVirtualMissPath(InvokeInst &CB, BasicBlock *MissBlock,
-                           const jeandle::VMCallbacks &Callbacks,
-                           uint64_t StatepointID, DomTreeUpdater *DTU) {
+/// Clones a Java invoke onto a newly created path and gives the clone a unique
+/// statepoint id. The original call-site attributes and deopt state are kept so
+/// code generation can describe the same Java frame on every path.
+InvokeInst *cloneInvokeWithFreshStatepoint(
+    InvokeInst &CB, BasicBlock &InsertBlock, BasicBlock *NormalDest,
+    const jeandle::VMCallbacks &Callbacks, uint64_t StatepointID,
+    bool MarkProfileMiss) {
   SmallVector<Value *, 8> Args(CB.args());
   SmallVector<OperandBundleDef, 4> Bundles;
   CB.getOperandBundlesAsDefs(Bundles);
 
+  IRBuilder<> Builder(&InsertBlock);
+  InvokeInst *Clone = Builder.CreateInvoke(
+      CB.getCalledFunction(), NormalDest, CB.getUnwindDest(), Args, Bundles);
+  Clone->setCallingConv(CB.getCallingConv());
+  Clone->setAttributes(CB.getAttributes());
+  Clone->copyMetadata(CB);
+  if (MarkProfileMiss)
+    Clone->addFnAttr(Attribute::get(
+        CB.getContext(), jeandle::Attribute::ProfileDevirtualizationMiss));
+
+  int64_t NewStatepointID =
+      Callbacks.GetNewStatepointID(static_cast<int64_t>(StatepointID));
+  if (NewStatepointID < 0)
+    reportInvalidStatepointID(
+        CB, "ProfileDevirtualization",
+        "GetNewStatepointID returned a negative id");
+  setStatepointID(*Clone, static_cast<uint64_t>(NewStatepointID));
+  return Clone;
+}
+
+void createVirtualMissPath(InvokeInst &CB, BasicBlock *MissBlock,
+                           const jeandle::VMCallbacks &Callbacks,
+                           uint64_t StatepointID, DomTreeUpdater &DTU) {
   BasicBlock *HitBlock = CB.getParent();
   BasicBlock *OriginalNormalDest = CB.getNormalDest();
   BasicBlock *UnwindDest = CB.getUnwindDest();
@@ -85,29 +119,16 @@ void createVirtualMissPath(InvokeInst &CB, BasicBlock *MissBlock,
 
   CB.setNormalDest(JoinBlock);
 
-  IRBuilder<> Builder(MissBlock);
-  InvokeInst *Miss = Builder.CreateInvoke(CB.getCalledFunction(), JoinBlock,
-                                          UnwindDest, Args, Bundles);
-  Miss->setCallingConv(CB.getCallingConv());
-  Miss->setAttributes(CB.getAttributes());
-  Miss->copyMetadata(CB);
   // Prevent a later refinement round from guarding this fallback again.
-  Miss->addFnAttr(Attribute::get(
-      CB.getContext(), jeandle::Attribute::ProfileDevirtualizationMiss));
+  InvokeInst *Miss = cloneInvokeWithFreshStatepoint(
+      CB, *MissBlock, JoinBlock, Callbacks, StatepointID,
+      /*MarkProfileMiss=*/true);
 
   for (PHINode &Phi : UnwindDest->phis()) {
     int HitIndex = Phi.getBasicBlockIndex(HitBlock);
     assert(HitIndex >= 0 && "unwind phi must contain the original invoke edge");
     Phi.addIncoming(Phi.getIncomingValue(HitIndex), MissBlock);
   }
-
-  int64_t NewStatepointID =
-      Callbacks.GetNewStatepointID(static_cast<int64_t>(StatepointID));
-  if (NewStatepointID < 0)
-    reportInvalidStatepointID(
-        CB, "ProfileDevirtualization",
-        "GetNewStatepointID returned a negative id");
-  setStatepointID(*Miss, static_cast<uint64_t>(NewStatepointID));
 
   if (!CB.getType()->isVoidTy() && !CB.use_empty()) {
     PHINode *Result =
@@ -124,14 +145,12 @@ void createVirtualMissPath(InvokeInst &CB, BasicBlock *MissBlock,
       U->set(Result);
   }
 
-  if (DTU) {
-    DTU->applyUpdates({{DominatorTree::Delete, HitBlock, OriginalNormalDest},
-                       {DominatorTree::Insert, HitBlock, JoinBlock},
-                       {DominatorTree::Insert, MissBlock, JoinBlock},
-                       {DominatorTree::Insert, MissBlock, UnwindDest},
-                       {DominatorTree::Insert, JoinBlock, OriginalNormalDest}});
-    DTU->flush();
-  }
+  DTU.applyUpdates({{DominatorTree::Delete, HitBlock, OriginalNormalDest},
+                    {DominatorTree::Insert, HitBlock, JoinBlock},
+                    {DominatorTree::Insert, MissBlock, JoinBlock},
+                    {DominatorTree::Insert, MissBlock, UnwindDest},
+                    {DominatorTree::Insert, JoinBlock, OriginalNormalDest}});
+  DTU.flush();
 }
 
 BasicBlock *insertExactReceiverCheck(Instruction &Inst, Value *Receiver,
@@ -139,18 +158,18 @@ BasicBlock *insertExactReceiverCheck(Instruction &Inst, Value *Receiver,
                                      uint64_t ProfileCount,
                                      uint64_t ProfileTotalCount,
                                      const StringRef &Prefix,
-                                     DomTreeUpdater *DTU) {
+                                     DomTreeUpdater &DTU) {
   assert(Receiver->getType()->isPointerTy() && "Receiver must be a pointer");
 
   BasicBlock *BB = Inst.getParent();
   Module *M = Inst.getModule();
   Function *LoadKlassFn = M->getFunction("jeandle.load_klass");
   Function *CheckExactKlassFn = M->getFunction("jeandle.check_exact_klass");
-  if (!LoadKlassFn || !CheckExactKlassFn)
-    return nullptr;
+  assert(LoadKlassFn && CheckExactKlassFn &&
+         "exact receiver check intrinsics must be present");
 
   LLVMContext &Context = Inst.getContext();
-  BasicBlock *CheckPass = SplitBlock(BB, &Inst, DTU, nullptr, nullptr,
+  BasicBlock *CheckPass = SplitBlock(BB, &Inst, &DTU, nullptr, nullptr,
                                      Prefix + "_exact_receiver_pass");
   BasicBlock *CheckFail = BasicBlock::Create(
       Context, Prefix + "_exact_receiver_fail", BB->getParent(), CheckPass);
@@ -172,10 +191,8 @@ BasicBlock *insertExactReceiverCheck(Instruction &Inst, Value *Receiver,
       Builder.CreateCondBr(IsProfiledReceiver, CheckPass, CheckFail);
   setBranchWeights(*Guard, ProfileCount, ProfileTotalCount);
 
-  if (DTU) {
-    DTU->applyUpdates({{DominatorTree::Insert, BB, CheckFail}});
-    DTU->flush();
-  }
+  DTU.applyUpdates({{DominatorTree::Insert, BB, CheckFail}});
+  DTU.flush();
   return CheckFail;
 }
 
@@ -187,7 +204,7 @@ struct BimorphicCheckBlocks {
 BimorphicCheckBlocks insertBimorphicReceiverChecks(
     Instruction &Inst, Value *Receiver, uintptr_t ReceiverKlass,
     uint64_t ProfileCount, uintptr_t ReceiverKlass2, uint64_t ProfileCount2,
-    uint64_t ProfileTotalCount, const StringRef &Prefix, DomTreeUpdater *DTU) {
+    uint64_t ProfileTotalCount, const StringRef &Prefix, DomTreeUpdater &DTU) {
   assert(Receiver->getType()->isPointerTy() && "Receiver must be a pointer");
   assert(ReceiverKlass2 != 0 && "second receiver must be present");
 
@@ -195,12 +212,12 @@ BimorphicCheckBlocks insertBimorphicReceiverChecks(
   Module *M = Inst.getModule();
   Function *LoadKlassFn = M->getFunction("jeandle.load_klass");
   Function *CheckExactKlassFn = M->getFunction("jeandle.check_exact_klass");
-  if (!LoadKlassFn || !CheckExactKlassFn)
-    return {};
+  assert(LoadKlassFn && CheckExactKlassFn &&
+         "exact receiver check intrinsics must be present");
 
   LLVMContext &Context = Inst.getContext();
   BasicBlock *FirstHitBlock = SplitBlock(
-      BB, &Inst, DTU, nullptr, nullptr, Prefix + "_exact_receiver_0_pass");
+      BB, &Inst, &DTU, nullptr, nullptr, Prefix + "_exact_receiver_0_pass");
   BasicBlock *SecondCheckBlock = BasicBlock::Create(
       Context, Prefix + "_exact_receiver_1_check", BB->getParent(),
       FirstHitBlock);
@@ -238,13 +255,10 @@ BimorphicCheckBlocks insertBimorphicReceiverChecks(
       ProfileTotalCount > ProfileCount ? ProfileTotalCount - ProfileCount : 1;
   setBranchWeights(*SecondGuard, ProfileCount2, RemainingCount);
 
-  if (DTU) {
-    DTU->applyUpdates({{DominatorTree::Insert, BB, SecondCheckBlock},
-                       {DominatorTree::Insert, SecondCheckBlock,
-                        SecondHitBlock},
-                       {DominatorTree::Insert, SecondCheckBlock, MissBlock}});
-    DTU->flush();
-  }
+  DTU.applyUpdates({{DominatorTree::Insert, BB, SecondCheckBlock},
+                    {DominatorTree::Insert, SecondCheckBlock, SecondHitBlock},
+                    {DominatorTree::Insert, SecondCheckBlock, MissBlock}});
+  DTU.flush();
   return {SecondHitBlock, MissBlock};
 }
 
@@ -253,11 +267,9 @@ InvokeInst *createBimorphicCallPaths(InvokeInst &CB,
                                      const jeandle::VMCallbacks &Callbacks,
                                      uint64_t StatepointID,
                                      bool CreateVirtualMiss,
-                                     DomTreeUpdater *DTU) {
-  SmallVector<Value *, 8> Args(CB.args());
-  SmallVector<OperandBundleDef, 4> Bundles;
-  CB.getOperandBundlesAsDefs(Bundles);
-
+                                     DomTreeUpdater &DTU) {
+  assert(Blocks.SecondHitBlock && Blocks.MissBlock &&
+         "bimorphic receiver checks must be present");
   BasicBlock *FirstHitBlock = CB.getParent();
   BasicBlock *OriginalNormalDest = CB.getNormalDest();
   BasicBlock *UnwindDest = CB.getUnwindDest();
@@ -272,38 +284,15 @@ InvokeInst *createBimorphicCallPaths(InvokeInst &CB,
         Phi.setIncomingBlock(I, JoinBlock);
   CB.setNormalDest(JoinBlock);
 
-  IRBuilder<> SecondBuilder(Blocks.SecondHitBlock);
-  InvokeInst *SecondHitCall = SecondBuilder.CreateInvoke(
-      CB.getCalledFunction(), JoinBlock, UnwindDest, Args, Bundles);
-  SecondHitCall->setCallingConv(CB.getCallingConv());
-  SecondHitCall->setAttributes(CB.getAttributes());
-  SecondHitCall->copyMetadata(CB);
-  int64_t SecondStatepointID =
-      Callbacks.GetNewStatepointID(static_cast<int64_t>(StatepointID));
-  if (SecondStatepointID < 0)
-    reportInvalidStatepointID(
-        CB, "ProfileDevirtualization",
-        "GetNewStatepointID returned a negative id");
-  setStatepointID(*SecondHitCall, static_cast<uint64_t>(SecondStatepointID));
+  InvokeInst *SecondHitCall = cloneInvokeWithFreshStatepoint(
+      CB, *Blocks.SecondHitBlock, JoinBlock, Callbacks, StatepointID,
+      /*MarkProfileMiss=*/false);
 
   InvokeInst *MissCall = nullptr;
-  if (CreateVirtualMiss) {
-    IRBuilder<> MissBuilder(Blocks.MissBlock);
-    MissCall = MissBuilder.CreateInvoke(CB.getCalledFunction(), JoinBlock,
-                                        UnwindDest, Args, Bundles);
-    MissCall->setCallingConv(CB.getCallingConv());
-    MissCall->setAttributes(CB.getAttributes());
-    MissCall->copyMetadata(CB);
-    MissCall->addFnAttr(Attribute::get(
-        CB.getContext(), jeandle::Attribute::ProfileDevirtualizationMiss));
-    int64_t MissStatepointID =
-        Callbacks.GetNewStatepointID(static_cast<int64_t>(StatepointID));
-    if (MissStatepointID < 0)
-      reportInvalidStatepointID(
-          CB, "ProfileDevirtualization",
-          "GetNewStatepointID returned a negative id");
-    setStatepointID(*MissCall, static_cast<uint64_t>(MissStatepointID));
-  }
+  if (CreateVirtualMiss)
+    MissCall = cloneInvokeWithFreshStatepoint(
+        CB, *Blocks.MissBlock, JoinBlock, Callbacks, StatepointID,
+        /*MarkProfileMiss=*/true);
 
   for (PHINode &Phi : UnwindDest->phis()) {
     int FirstHitIndex = Phi.getBasicBlockIndex(FirstHitBlock);
@@ -332,28 +321,23 @@ InvokeInst *createBimorphicCallPaths(InvokeInst &CB,
       U->set(Result);
   }
 
-  if (DTU) {
-    SmallVector<DominatorTree::UpdateType, 8> Updates = {
-        {DominatorTree::Delete, FirstHitBlock, OriginalNormalDest},
-        {DominatorTree::Insert, FirstHitBlock, JoinBlock},
-        {DominatorTree::Insert, Blocks.SecondHitBlock, JoinBlock},
-        {DominatorTree::Insert, Blocks.SecondHitBlock, UnwindDest},
-        {DominatorTree::Insert, JoinBlock, OriginalNormalDest}};
-    if (MissCall) {
-      Updates.push_back(
-          {DominatorTree::Insert, Blocks.MissBlock, JoinBlock});
-      Updates.push_back(
-          {DominatorTree::Insert, Blocks.MissBlock, UnwindDest});
-    }
-    DTU->applyUpdates(Updates);
-    DTU->flush();
+  SmallVector<DominatorTree::UpdateType, 8> Updates = {
+      {DominatorTree::Delete, FirstHitBlock, OriginalNormalDest},
+      {DominatorTree::Insert, FirstHitBlock, JoinBlock},
+      {DominatorTree::Insert, Blocks.SecondHitBlock, JoinBlock},
+      {DominatorTree::Insert, Blocks.SecondHitBlock, UnwindDest},
+      {DominatorTree::Insert, JoinBlock, OriginalNormalDest}};
+  if (MissCall) {
+    Updates.push_back({DominatorTree::Insert, Blocks.MissBlock, JoinBlock});
+    Updates.push_back({DominatorTree::Insert, Blocks.MissBlock, UnwindDest});
   }
+  DTU.applyUpdates(Updates);
+  DTU.flush();
   return SecondHitCall;
 }
 
 bool optimizeCallSite(InvokeInst &CB, DomTreeUpdater &DTU,
-                      const jeandle::VMCallbacks &Callbacks, uintptr_t Caller,
-                      int PatchSize) {
+                      const jeandle::VMCallbacks &Callbacks, int PatchSize) {
   // Do not recursively guard a fallback created by an earlier round.
   if (CB.getAttributes().hasFnAttr(
           jeandle::Attribute::ProfileDevirtualizationMiss))
@@ -362,65 +346,40 @@ bool optimizeCallSite(InvokeInst &CB, DomTreeUpdater &DTU,
   if (CB.hasFnAttr(jeandle::Attribute::MonomorphicTarget))
     return false;
 
-  Attribute BC = CB.getFnAttr(jeandle::Attribute::Bytecode);
-  if (!checkStringAttr(BC))
-    return false;
-  StringRef Bytecode = BC.getValueAsString();
-  jeandle::InvokeType InvokeKind = jeandle::getInvokeType(Bytecode);
-  if (InvokeKind != jeandle::InvokeVirtual &&
-      InvokeKind != jeandle::InvokeInterface)
+  auto CallSite = getJavaVirtualCallSite(CB);
+  if (!CallSite)
     return false;
 
-  Value *Receiver = CB.getArgOperand(0);
-  assert(Receiver->getType()->isPointerTy() &&
-         "virtual call receiver must be a pointer");
-
-  uintptr_t Callee = 0;
-  uintptr_t Holder = 0;
-  uint64_t Id = 0;
-  Function *VirtualCallee = CB.getCalledFunction();
-  if (!VirtualCallee)
-    return false;
-  getFunctionJavaMethod(*VirtualCallee, Callee);
-  getUIntPtrFnAttr(CB, jeandle::Attribute::DeclaredHolder, Holder);
-  getUIntFnAttr(CB, jeandle::Attribute::StatepointID, Id);
-  assert(Id <= 0xffffffff && "must be 32 bits");
-  assert(Callee != 0 && Holder != 0 && "should be a java call");
-
-  uintptr_t ScopeCaller = getCurrentDeoptMethod(CB, Caller);
   int BCI = getCurrentDeoptBCI(CB);
-  jeandle::ProfileDevirtInfo OptInfo =
-      jeandle::ProfileDevirtInfo::decode(Callbacks.GetProfileDevirtInfo(
-          ScopeCaller, Callee, Holder, BCI, InvokeKind));
-  if (OptInfo.ReceiverKlass == 0 || OptInfo.TargetMethod == 0)
+  jeandle::ProfileDevirtualizationInfo OptInfo =
+      jeandle::ProfileDevirtualizationInfo::decode(
+          Callbacks.GetProfileDevirtualizationInfo(
+              static_cast<int64_t>(CallSite->StatepointID)));
+  if (!OptInfo.isValid())
     return false;
   // Keep profile devirtualization independent from the inliner. A guarded
   // direct target remains valid even if a later inline round declines it.
-  bool IsBimorphic = OptInfo.ReceiverKlass2 != 0;
-  if (IsBimorphic && OptInfo.TargetMethod2 == 0)
-    return false;
+  bool IsBimorphic = OptInfo.isBimorphic();
 
-  std::string TargetName = Callbacks.GetJavaMethodName(OptInfo.TargetMethod);
-  if (TargetName.empty())
+  Module &M = *CB.getModule();
+  FunctionType *CallType = CB.getFunctionType();
+  if (!canGetOrInsertJavaMethodFunction(
+          M, OptInfo.TargetMethodName, CallType, OptInfo.TargetMethod) ||
+      (IsBimorphic &&
+       !canGetOrInsertJavaMethodFunction(M, OptInfo.TargetMethodName2, CallType,
+                                         OptInfo.TargetMethod2)) ||
+      (IsBimorphic && OptInfo.TargetMethodName == OptInfo.TargetMethodName2 &&
+       OptInfo.TargetMethod != OptInfo.TargetMethod2))
     return false;
-  std::string TargetName2;
-  if (IsBimorphic) {
-    TargetName2 = Callbacks.GetJavaMethodName(OptInfo.TargetMethod2);
-    if (TargetName2.empty())
-      return false;
-  }
 
   Function *Func = getOrInsertJavaMethodFunction(
-      *CB.getModule(), TargetName, CB.getFunctionType(), OptInfo.TargetMethod);
-  if (!Func)
-    return false;
+      M, OptInfo.TargetMethodName, CallType, OptInfo.TargetMethod);
+  assert(Func && "profile target was prevalidated");
   Function *Func2 = nullptr;
   if (IsBimorphic) {
-    Func2 = getOrInsertJavaMethodFunction(*CB.getModule(), TargetName2,
-                                          CB.getFunctionType(),
-                                          OptInfo.TargetMethod2);
-    if (!Func2)
-      return false;
+    Func2 = getOrInsertJavaMethodFunction(M, OptInfo.TargetMethodName2,
+                                          CallType, OptInfo.TargetMethod2);
+    assert(Func2 && "second profile target was prevalidated");
   }
 
   std::string Prefix = "bci_profile_devirt_" + std::to_string(BCI);
@@ -431,13 +390,12 @@ bool optimizeCallSite(InvokeInst &CB, DomTreeUpdater &DTU,
   InvokeInst *SecondHitCall = nullptr;
   if (IsBimorphic) {
     BimorphicCheckBlocks Blocks = insertBimorphicReceiverChecks(
-        CB, Receiver, OptInfo.ReceiverKlass, OptInfo.Count,
+        CB, CallSite->Receiver, OptInfo.ReceiverKlass, OptInfo.Count,
         OptInfo.ReceiverKlass2, OptInfo.Count2, OptInfo.TotalCount, Prefix,
-        &DTU);
-    if (!Blocks.SecondHitBlock || !Blocks.MissBlock)
-      return false;
+        DTU);
     SecondHitCall = createBimorphicCallPaths(
-        CB, Blocks, Callbacks, Id, !OptInfo.DeoptimizeOnMiss, &DTU);
+        CB, Blocks, Callbacks, CallSite->StatepointID,
+        !OptInfo.DeoptimizeOnMiss, DTU);
     if (OptInfo.DeoptimizeOnMiss) {
       IRBuilder<> MissBuilder(Blocks.MissBlock);
       buildDeoptimize(MissBuilder, *CB.getModule(), OptInfo.DeoptReason,
@@ -446,44 +404,34 @@ bool optimizeCallSite(InvokeInst &CB, DomTreeUpdater &DTU,
     }
   } else {
     BasicBlock *MissBlock = insertExactReceiverCheck(
-        CB, Receiver, OptInfo.ReceiverKlass, OptInfo.Count, OptInfo.TotalCount,
-        Prefix, &DTU);
-    if (!MissBlock)
-      return false;
+        CB, CallSite->Receiver, OptInfo.ReceiverKlass, OptInfo.Count,
+        OptInfo.TotalCount, Prefix, DTU);
     if (OptInfo.DeoptimizeOnMiss) {
       IRBuilder<> MissBuilder(MissBlock);
       buildDeoptimize(MissBuilder, *CB.getModule(), OptInfo.DeoptReason,
                       jeandle::Deoptimization::Action_maybe_recompile,
                       *PreCallDeopt);
     } else {
-      createVirtualMissPath(CB, MissBlock, Callbacks, Id, &DTU);
+      createVirtualMissPath(CB, MissBlock, Callbacks, CallSite->StatepointID,
+                            DTU);
     }
   }
 
   updateStaticOptVirtualCallAttrs(CB, PatchSize,
                                   EnableProfileDevirtInlining);
   CB.setCalledFunction(Func);
-  Func->setCallingConv(CallingConv::Hotspot_JIT);
-  Func->setGC(jeandle::JeandleGC);
-  Func->addFnAttr(Attribute::get(CB.getContext(),
-                                 jeandle::Attribute::JavaMethod,
-                                 std::to_string(OptInfo.TargetMethod)));
 
   if (SecondHitCall) {
     updateStaticOptVirtualCallAttrs(*SecondHitCall, PatchSize,
                                     EnableProfileDevirtInlining);
     SecondHitCall->setCalledFunction(Func2);
-    Func2->setCallingConv(CallingConv::Hotspot_JIT);
-    Func2->setGC(jeandle::JeandleGC);
-    Func2->addFnAttr(Attribute::get(CB.getContext(),
-                                    jeandle::Attribute::JavaMethod,
-                                    std::to_string(OptInfo.TargetMethod2)));
     uint64_t SecondId = 0;
     getUIntFnAttr(*SecondHitCall, jeandle::Attribute::StatepointID, SecondId);
     Callbacks.UpdateToStaticOptVirtualCall(static_cast<int64_t>(SecondId));
   }
 
-  Callbacks.UpdateToStaticOptVirtualCall(static_cast<int64_t>(Id));
+  Callbacks.UpdateToStaticOptVirtualCall(
+      static_cast<int64_t>(CallSite->StatepointID));
   LLVM_DEBUG(dbgs() << "Profile devirtualized " << CB;
              if (SecondHitCall) dbgs() << " and " << *SecondHitCall;
              dbgs() << "\n";);
@@ -500,10 +448,13 @@ PreservedAnalyses ProfileDevirtualization::run(Function &F,
     return PreservedAnalyses::all();
 
   const jeandle::VMCallbacks *Callbacks = jeandle::getVMCallbacks();
-  assert(Callbacks && Callbacks->GetJavaMethodName &&
-         Callbacks->GetProfileDevirtInfo &&
+  assert(Callbacks && Callbacks->GetProfileDevirtualizationInfo &&
          Callbacks->GetNewStatepointID &&
          Callbacks->UpdateToStaticOptVirtualCall && "VMCallbacks must be set");
+
+  uintptr_t Caller = 0;
+  if (!getFunctionJavaMethod(F, Caller))
+    return PreservedAnalyses::all();
 
   DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(F);
   DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
@@ -515,15 +466,14 @@ PreservedAnalyses ProfileDevirtualization::run(Function &F,
   }
 
   bool Changed = false;
-  uintptr_t Caller = 0;
-  PatchSize =
-      PatchSize == 0 ? getStaticCallPatchSize(*F.getParent()) : PatchSize;
-  getFunctionJavaMethod(F, Caller);
+  int PatchSize = getStaticCallPatchSize(*F.getParent());
   for (InvokeInst *CB : Calls)
-    Changed |= optimizeCallSite(*CB, DTU, *Callbacks, Caller, PatchSize);
+    Changed |= optimizeCallSite(*CB, DTU, *Callbacks, PatchSize);
 
   if (!Changed)
     return PreservedAnalyses::all();
 
-  return PreservedAnalyses::none();
+  PreservedAnalyses PA;
+  PA.preserve<DominatorTreeAnalysis>();
+  return PA;
 }

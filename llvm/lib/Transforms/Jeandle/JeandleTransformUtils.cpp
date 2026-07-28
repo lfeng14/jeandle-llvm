@@ -11,11 +11,45 @@
 #include "llvm/Transforms/Jeandle/JeandleTransformUtils.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/IR/Jeandle/Deoptimization.h"
+#include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
+#include <limits>
+
 namespace llvm {
+
+std::optional<JavaVirtualCallSite> getJavaVirtualCallSite(InvokeInst &CB) {
+  if (CB.arg_empty() || !CB.hasDeoptState())
+    return std::nullopt;
+
+  Attribute BytecodeAttr = CB.getFnAttr(jeandle::Attribute::Bytecode);
+  if (!checkStringAttr(BytecodeAttr))
+    return std::nullopt;
+  StringRef Bytecode = BytecodeAttr.getValueAsString();
+  jeandle::InvokeType InvokeKind = jeandle::getInvokeType(Bytecode);
+  if (InvokeKind != jeandle::InvokeVirtual &&
+      InvokeKind != jeandle::InvokeInterface)
+    return std::nullopt;
+
+  Function *Callee = CB.getCalledFunction();
+  Value *Receiver = CB.getArgOperand(0);
+  if (!Callee || !Receiver->getType()->isPointerTy())
+    return std::nullopt;
+
+  JavaVirtualCallSite CallSite;
+  CallSite.Receiver = Receiver;
+  CallSite.InvokeKind = InvokeKind;
+  if (!getFunctionJavaMethod(*Callee, CallSite.CalleeMethod) ||
+      !getUIntPtrFnAttr(CB, jeandle::Attribute::DeclaredHolder,
+                       CallSite.DeclaredHolder) ||
+      !getUIntFnAttr(CB, jeandle::Attribute::StatepointID,
+                     CallSite.StatepointID) ||
+      CallSite.StatepointID > std::numeric_limits<uint32_t>::max())
+    return std::nullopt;
+  return CallSite;
+}
 
 int getStaticCallPatchSize(const Module &M) {
   NamedMDNode *NMD =
@@ -29,23 +63,31 @@ int getStaticCallPatchSize(const Module &M) {
       ->getSExtValue();
 }
 
+bool canGetOrInsertJavaMethodFunction(const Module &M, StringRef Name,
+                                      FunctionType *Type, uintptr_t Method) {
+  const Function *F = M.getFunction(Name);
+  if (!F)
+    return true;
+  uintptr_t ExistingMethod = 0;
+  return F->getFunctionType() == Type &&
+         getFunctionJavaMethod(*F, ExistingMethod) && ExistingMethod == Method;
+}
+
 Function *getOrInsertJavaMethodFunction(Module &M, StringRef Name,
                                         FunctionType *Type,
                                         uintptr_t Method) {
+  if (!canGetOrInsertJavaMethodFunction(M, Name, Type, Method))
+    return nullptr;
+
   Function *F = M.getFunction(Name);
   if (!F) {
     F = Function::Create(Type, GlobalValue::ExternalLinkage, Name, M);
     F->addFnAttr(Attribute::get(M.getContext(),
                                 jeandle::Attribute::JavaMethod,
                                 std::to_string(Method)));
-    return F;
   }
-
-  uintptr_t ExistingMethod = 0;
-  if (F->getFunctionType() != Type ||
-      !getFunctionJavaMethod(*F, ExistingMethod) ||
-      ExistingMethod != Method)
-    return nullptr;
+  F->setCallingConv(CallingConv::Hotspot_JIT);
+  F->setGC(jeandle::JeandleGC);
   return F;
 }
 
@@ -233,10 +275,11 @@ uintptr_t getCurrentDeoptMethod(const CallBase &CB, uintptr_t RootMethod) {
     return Method;
 
   // Current inlinee layout: method marker, method, should-reexecute, bci, bci.
-  if (Scope.BCIPairStart >= 3)
+  if (Scope.BCIPairStart >= 3) {
     if (uintptr_t Method = DecodeMethod(Scope.BCIPairStart - 3,
                                         Scope.BCIPairStart - 2))
       return Method;
+  }
 
   reportInvalidDeoptBundle(CB, "missing inlinee method before bci");
 }

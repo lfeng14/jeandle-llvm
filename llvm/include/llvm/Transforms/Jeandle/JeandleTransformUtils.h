@@ -19,9 +19,26 @@
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/Deoptimization.h"
+#include "llvm/IR/Jeandle/InvokeType.h"
 #include "llvm/IR/Module.h"
 
+#include <cstdint>
+#include <optional>
+
 namespace llvm {
+
+/// Canonical LLVM-side view of a well-formed Java virtual invoke.
+struct JavaVirtualCallSite {
+  Value *Receiver = nullptr;
+  uintptr_t CalleeMethod = 0;
+  uintptr_t DeclaredHolder = 0;
+  uint64_t StatepointID = 0;
+  jeandle::InvokeType InvokeKind = jeandle::ILLEGAL;
+};
+
+/// Recognizes a Java invokevirtual or invokeinterface instruction and decodes
+/// the attributes shared by devirtualization passes.
+std::optional<JavaVirtualCallSite> getJavaVirtualCallSite(InvokeInst &CB);
 
 /// Reads the HotSpot patch size used by optimized virtual calls.
 int getStaticCallPatchSize(const Module &M);
@@ -64,8 +81,7 @@ void buildDeoptimize(IRBuilder<> &Builder, Module &M,
 /// \param Prefix Prefix used to name the generated basic blocks.
 /// \param DTU Optional dominator tree updater kept in sync with the new CFG,
 /// could be null.
-/// \returns If insert checkcast success, return the fail block for checkcast,
-/// otherwise return nullptr.
+/// \returns The fail block for the inserted check.
 BasicBlock *insertCheckInstanceOf(Instruction &Inst, Value *Receiver,
                                   uintptr_t Constraint, const StringRef &Prefix,
                                   DomTreeUpdater *DTU = nullptr);
@@ -118,7 +134,8 @@ inline bool getFunctionJavaMethod(const Function &F, uintptr_t &Method) {
   return parseUIntPtr(A.getValueAsString(), Method);
 }
 
-/// Finds or creates the LLVM declaration for a concrete Java method.
+/// Finds or creates the LLVM declaration for a concrete Java method and
+/// applies the Jeandle calling convention and GC strategy.
 ///
 /// Java symbols produced by the VM include ciMethod identity so classes with
 /// the same binary name from different class loaders remain distinct.  Keep
@@ -130,6 +147,12 @@ inline bool getFunctionJavaMethod(const Function &F, uintptr_t &Method) {
 Function *getOrInsertJavaMethodFunction(Module &M, StringRef Name,
                                         FunctionType *Type,
                                         uintptr_t Method);
+
+/// Checks whether getOrInsertJavaMethodFunction can use p Name without
+/// mutating the module. This lets multi-target transforms validate every name
+/// before creating any declaration.
+bool canGetOrInsertJavaMethodFunction(const Module &M, StringRef Name,
+                                      FunctionType *Type, uintptr_t Method);
 
 /// Reads a named function attribute from a call and parses it as uintptr_t.
 ///

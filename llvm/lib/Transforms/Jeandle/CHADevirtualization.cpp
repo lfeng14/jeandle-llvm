@@ -31,8 +31,6 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/Deoptimization.h"
-#include "llvm/IR/Jeandle/GCStrategy.h"
-#include "llvm/IR/Jeandle/InvokeType.h"
 #include "llvm/IR/Jeandle/JavaType.h"
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/Jeandle/VMCallback.h"
@@ -43,7 +41,6 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #include <cstdint>
-#include <optional>
 
 #define DEBUG_TYPE "cha-devirtualization"
 
@@ -54,44 +51,21 @@ namespace {
 bool optimizeCallSite(InvokeInst &CB, DominatorTree &DT, DomTreeUpdater &DTU,
                       const jeandle::VMCallbacks &Callbacks, uintptr_t Caller,
                       int PatchSize) {
-  // quick check if this is a java virtual call.
   if (CB.hasFnAttr(jeandle::Attribute::MonomorphicTarget))
     return false;
 
-  Attribute BC = CB.getFnAttr(jeandle::Attribute::Bytecode);
-  if (!checkStringAttr(BC))
+  auto CallSite = getJavaVirtualCallSite(CB);
+  if (!CallSite)
     return false;
 
-  StringRef Bytecode = BC.getValueAsString();
-  jeandle::InvokeType InvokeKind = jeandle::getInvokeType(Bytecode);
-  // CHADevirtualization can only handles invokevirtual and invokeinterface
-  // calls now.
-  if (InvokeKind != jeandle::InvokeVirtual &&
-      InvokeKind != jeandle::InvokeInterface)
-    return false;
-
-  Value *Receiver = CB.getArgOperand(0);
-  assert(Receiver->getType()->isPointerTy() &&
-         "virtual call receiver must be a pointer");
-
-  uintptr_t Callee = 0;
-  uintptr_t Holder = 0;
-  uint64_t Id = 0;
-  getFunctionJavaMethod(*CB.getCalledFunction(), Callee);
-  getUIntPtrFnAttr(CB, jeandle::Attribute::DeclaredHolder, Holder);
-  getUIntFnAttr(CB, jeandle::Attribute::StatepointID, Id);
-  assert(Id >= 0 && Id <= 0xffffffff && "must be 32 bits.");
-  assert(Callee != 0 && Holder != 0 &&
-         (InvokeKind == jeandle::InvokeVirtual ||
-          InvokeKind == jeandle::InvokeInterface) &&
-         "should be a java call");
-
-  jeandle::JavaType ReceiverType = jeandle::getJavaType(Receiver, &DT, &CB);
+  jeandle::JavaType ReceiverType =
+      jeandle::getJavaType(CallSite->Receiver, &DT, &CB);
 
   uintptr_t ScopeCaller = getCurrentDeoptMethod(CB, Caller);
   auto CHAOptInfo = jeandle::CHAOptInfo::decode(
-      Callbacks.GetCHAOptInfo(ScopeCaller, Callee, Holder, ReceiverType.Klass,
-                              ReceiverType.Exact, InvokeKind));
+      Callbacks.GetCHAOptInfo(ScopeCaller, CallSite->CalleeMethod,
+                              CallSite->DeclaredHolder, ReceiverType.Klass,
+                              ReceiverType.Exact, CallSite->InvokeKind));
   if (CHAOptInfo.Constraint == 0)
     return false;
 
@@ -104,27 +78,22 @@ bool optimizeCallSite(InvokeInst &CB, DominatorTree &DT, DomTreeUpdater &DTU,
   int BCI = getCurrentDeoptBCI(CB);
   std::string Prefix = "bci_cha_" + std::to_string(BCI);
 
-  std::optional<OperandBundleDef> PreCallDeopt = createPreCallDeoptBundle(CB);
-  if (!PreCallDeopt)
-    return false;
+  OperandBundleDef PreCallDeopt = createPreCallDeoptBundle(CB);
 
   BasicBlock *CheckInstanceofFail =
-      insertCheckInstanceOf(CB, Receiver, CHAOptInfo.Constraint, Prefix, &DTU);
+      insertCheckInstanceOf(CB, CallSite->Receiver, CHAOptInfo.Constraint,
+                            Prefix, &DTU);
   assert(CheckInstanceofFail && "failed to insert check_instanceof");
 
   IRBuilder<> BuilderFail(CheckInstanceofFail);
   buildDeoptimize(BuilderFail, *CB.getModule(), CHAOptInfo.DeoptReason,
-                  jeandle::Deoptimization::Action_none, *PreCallDeopt);
+                  jeandle::Deoptimization::Action_none, PreCallDeopt);
 
   updateStaticOptVirtualCallAttrs(CB, PatchSize);
   CB.setCalledFunction(Func);
-  Func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  Func->setGC(llvm::jeandle::JeandleGC);
-  Func->addFnAttr(llvm::Attribute::get(CB.getContext(),
-                                       llvm::jeandle::Attribute::JavaMethod,
-                                       std::to_string(CHAOptInfo.Method)));
 
-  Callbacks.UpdateToStaticOptVirtualCall(static_cast<int64_t>(Id));
+  Callbacks.UpdateToStaticOptVirtualCall(
+      static_cast<int64_t>(CallSite->StatepointID));
   LLVM_DEBUG(dbgs() << "CHA: devirtualized " << CB << "\n");
   DTU.flush();
   return true;
