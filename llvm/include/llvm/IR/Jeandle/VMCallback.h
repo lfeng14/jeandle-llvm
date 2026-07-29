@@ -179,6 +179,9 @@ enum class JeandleInlineReason : int {
       (VMCallbackValueType::Uintptr, VMCallbackValueType::Uintptr,               \
        VMCallbackValueType::Uintptr, VMCallbackValueType::Uintptr,               \
        VMCallbackValueType::Bool, VMCallbackValueType::Int), 6)                  \
+  def(GetProfileDevirtualizationInfo, std::string, String,                       \
+      (int64_t a1), (a1),                                                        \
+      (VMCallbackValueType::Long), 1)                                            \
   def(UpdateToStaticOptVirtualCall, bool, Bool,                                  \
       (int64_t a1), (a1),                                                        \
       (VMCallbackValueType::Long), 1)
@@ -260,14 +263,15 @@ enum class JeandleInlineReason : int {
 ///                         materializing and inlining callees. The VM handles
 ///                         failures before returning, so LLVM expects a true
 ///                         result.
-///                         "oop_handle_Test_1") for a given oop id.
-///   GetOopKlass         — Returns the actual runtime klass pointer of the
-///                         constant oop with the given oop id, or 0 if it is
-///                         unavailable. Pure (id -> klass).
 ///   GetCHAOptInfo       — Returns the CHA analysis info for CHA
 ///                         devirtualization, or 0 if the call site cannot
 ///                         be optimized. The JVM implementation also keeps
 ///                         CallSiteInfo in sync for normal compilation.
+///   GetProfileDevirtualizationInfo
+///                       — Queries receiver profiles and target resolution in
+///                         the VM by statepoint id. Returns a self-contained
+///                         monomorphic or bimorphic optimization result, or
+///                         empty if the call should remain virtual.
 ///   UpdateToStaticOptVirtualCall
 ///                       — Updates the call site to a static opt virtual call.
 ///                         This callback has side effects on jvm side.
