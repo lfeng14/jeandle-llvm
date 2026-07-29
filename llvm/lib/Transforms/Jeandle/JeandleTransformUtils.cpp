@@ -252,9 +252,9 @@ uintptr_t getCurrentDeoptMethod(const CallBase &CB, uintptr_t RootMethod) {
 
   OperandBundleUse Deopt = *CB.getOperandBundle(LLVMContext::OB_deopt);
   const uint64_t MethodEncoding =
-      jeandle::DeoptValueEncoding(0,
-                                   jeandle::DeoptValueEncoding::MethodType,
-                                   jeandle::T_METADATA).encode();
+      jeandle::DeoptValueEncoding(0, jeandle::DeoptValueEncoding::MethodType,
+                                  jeandle::T_METADATA)
+          .encode();
   auto DecodeMethod = [&](unsigned EncodingIndex,
                           unsigned MethodIndex) -> uintptr_t {
     auto *Encoding = dyn_cast<ConstantInt>(Deopt.Inputs[EncodingIndex].get());
