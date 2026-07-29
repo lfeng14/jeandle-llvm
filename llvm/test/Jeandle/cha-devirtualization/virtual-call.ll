@@ -6,6 +6,10 @@
 
 @jeandle.personality = global ptr null
 
+; MethodType(0, T_METADATA) encoding used by the current inlinee layout.
+; Keep this in sync with DeoptValueEncoding.
+; METHOD_ENCODING = 393233
+
 declare hotspotcc i1 @jeandle.check_instanceof(ptr, ptr addrspace(1))
 declare hotspotcc ptr addrspace(1) @jeandle.new_array(i32) gc "hotspotgc"
 declare hotspotcc i32 @Virtual_target(ptr addrspace(1)) #1 gc "hotspotgc"
@@ -25,7 +29,9 @@ entry:
           to label %after_alloc unwind label %unwind
 
 after_alloc:
-  %ret = invoke hotspotcc i32 @Virtual_target(ptr addrspace(1) %recv) #2 [ "deopt"(i32 7, i32 7) ]
+  ; Root scope followed by a current-layout inlinee scope:
+  ; method marker, method, should-reexecute, duplicated bci.
+  %ret = invoke hotspotcc i32 @Virtual_target(ptr addrspace(1) %recv) #2 [ "deopt"(i64 0, i32 0, i32 0, i64 393233, i64 100, i64 0, i32 7, i32 7) ]
           to label %normal unwind label %unwind
 
 normal:
