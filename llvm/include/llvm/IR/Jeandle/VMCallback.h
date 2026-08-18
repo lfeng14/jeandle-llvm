@@ -226,7 +226,13 @@ enum class JeandleInlineReason : int {
       (VMCallbackValueType::Uintptr, VMCallbackValueType::Int), 2)               \
   def(GetSignatureArgTypeKlass, uintptr_t, Uintptr,                              \
       (uintptr_t a1, int a2), (a1, a2),                                          \
-      (VMCallbackValueType::Uintptr, VMCallbackValueType::Int), 2)
+      (VMCallbackValueType::Uintptr, VMCallbackValueType::Int), 2)               \
+  def(GetProfileDevirtualizationInfo, std::string, String,                       \
+      (int64_t a1), (a1),                                                        \
+      (VMCallbackValueType::Long), 1)                                            \
+  def(UpdateToStaticOptVirtualCall, bool, Bool,                                  \
+      (int64_t a1), (a1),                                                        \
+      (VMCallbackValueType::Long), 1)
 // clang-format on
 
 // =============================================================================
@@ -386,6 +392,13 @@ enum class JeandleInlineReason : int {
 ///                         means the call site cannot be optimized.
 ///   UpdateCallSite
 ///                       — Updates the call site to given destination.
+///   GetProfileDevirtualizationInfo
+///                       — Queries receiver profiles and target resolution in
+///                         the VM by statepoint id. Returns a self-contained
+///                         monomorphic or bimorphic optimization result, or
+///                         empty if the call should remain virtual.
+///   UpdateToStaticOptVirtualCall
+///                       — Updates the call site to a static opt virtual call.
 ///                         This callback has side effects on jvm side.
 ///   GetSignatureAccessingKlass
 ///                       — Returns the signature accessing klass as a Klass

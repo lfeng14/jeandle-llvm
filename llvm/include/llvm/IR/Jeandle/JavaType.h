@@ -67,8 +67,8 @@ struct JavaType {
 /// attributes and metadata attached to the value (and PHI incoming values).
 ///
 /// When Context is provided, additionally performs context-sensitive sharpening
-/// by examining dominating type checks (jeandle.check_instanceof calls) that
-/// constrain the value's type at the point of the context instruction.
+/// by examining dominating type guards that constrain the value's type at the
+/// point of the context instruction.
 ///
 /// JavaType does not model nullability. Sharpening derived from
 /// jeandle.check_instanceof is therefore only sound for consumers whose IR/API
@@ -79,6 +79,7 @@ struct JavaType {
 /// - Select instructions (constant and non-constant arms)
 /// - Integer casts: zext, sext, trunc (but not bitcast, fpcast, etc.)
 /// - ICmp comparisons of a check_instanceof result against a constant
+/// - Direct jeandle.check_exact_klass calls
 /// - And (i1) of two traced conditions
 /// - Or (i1) of two traced conditions
 /// - Xor i1 %a, true: logical NOT
@@ -94,7 +95,9 @@ JavaType typeUnion(JavaType A, JavaType B);
 
 /// Compute the type intersection of two Java types. Used when both constraints
 /// apply simultaneously to the same value (base type + sharpened type).
-/// Narrows to the more specific positive type and unions ExcludedKlasses.
+/// Narrows to the more specific positive type and unions ExcludedKlasses. If
+/// both constraints have the same Klass, either exact constraint makes the
+/// intersection exact.
 JavaType typeIntersect(JavaType A, JavaType B);
 
 /// Returns true if Klass and OtherKlass are provably incompatible under

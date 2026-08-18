@@ -69,16 +69,6 @@ int getPatchSize(const Module *M, const char *PatchType) {
       ->getSExtValue();
 }
 
-void updateStaticOptVirtualCallAttrs(InvokeInst &CB, int PatchSize) {
-  CB.addParamAttr(0, Attribute::NoUndef);
-  CB.removeFnAttr(jeandle::Attribute::StatepointNumPatchBytes);
-  CB.addFnAttr(Attribute::get(CB.getContext(),
-                              jeandle::Attribute::StatepointNumPatchBytes,
-                              std::to_string(PatchSize)));
-  CB.addFnAttr(
-      Attribute::get(CB.getContext(), jeandle::Attribute::MonomorphicTarget));
-}
-
 // Return the oop-handle identifier loaded by argument ArgNum, or -1 when
 // the argument is not a load from a known oop handle.
 // This is normally used to get the oop-handle for a constant java value.
