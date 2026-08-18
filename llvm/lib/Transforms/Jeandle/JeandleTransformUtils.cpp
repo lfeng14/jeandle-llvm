@@ -20,9 +20,114 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
+#include <limits>
 #include <string>
 
 namespace llvm {
+
+std::optional<JavaVirtualCallSite> getJavaVirtualCallSite(InvokeInst &CB) {
+  if (CB.arg_empty() || !CB.hasDeoptState())
+    return std::nullopt;
+
+  Attribute BytecodeAttr = CB.getFnAttr(jeandle::Attribute::Bytecode);
+  if (!checkStringAttr(BytecodeAttr))
+    return std::nullopt;
+  StringRef Bytecode = BytecodeAttr.getValueAsString();
+  jeandle::InvokeType InvokeKind = jeandle::getInvokeType(Bytecode);
+  if (InvokeKind != jeandle::InvokeVirtual &&
+      InvokeKind != jeandle::InvokeInterface)
+    return std::nullopt;
+
+  Function *Callee = CB.getCalledFunction();
+  Value *Receiver = CB.getArgOperand(0);
+  if (!Callee || !Receiver->getType()->isPointerTy())
+    return std::nullopt;
+
+  JavaVirtualCallSite CallSite;
+  CallSite.Receiver = Receiver;
+  CallSite.InvokeKind = InvokeKind;
+  if (!getFunctionJavaMethod(*Callee, CallSite.CalleeMethod) ||
+      !getUIntPtrFnAttr(CB, jeandle::Attribute::DeclaredHolder,
+                        CallSite.DeclaredHolder) ||
+      !getUIntFnAttr(CB, jeandle::Attribute::StatepointID,
+                     CallSite.StatepointID) ||
+      CallSite.StatepointID > std::numeric_limits<uint32_t>::max())
+    return std::nullopt;
+  return CallSite;
+}
+
+int getStaticCallPatchSize(const Module &M) {
+  NamedMDNode *NMD = M.getNamedMetadata(jeandle::Metadata::StaticCallPatchSize);
+  assert(NMD && NMD->getNumOperands() == 1 && "expected patch size metadata");
+  MDNode *PatchNode = NMD->getOperand(0);
+  assert(PatchNode && PatchNode->getNumOperands() == 1 &&
+         "expected one patch size operand");
+  return mdconst::extract<ConstantInt>(PatchNode->getOperand(0))
+      ->getSExtValue();
+}
+
+bool canGetOrInsertJavaMethodFunction(const Module &M, StringRef Name,
+                                      FunctionType *Type, uintptr_t Method) {
+  const Function *F = M.getFunction(Name);
+  if (!F)
+    return true;
+  uintptr_t ExistingMethod = 0;
+  return F->getFunctionType() == Type &&
+         getFunctionJavaMethod(*F, ExistingMethod) && ExistingMethod == Method;
+}
+
+Function *getOrInsertJavaMethodFunction(Module &M, StringRef Name,
+                                        FunctionType *Type, uintptr_t Method,
+                                        bool IsAccessor) {
+  if (!canGetOrInsertJavaMethodFunction(M, Name, Type, Method))
+    return nullptr;
+
+  Function *F = M.getFunction(Name);
+  if (!F) {
+    F = Function::Create(Type, GlobalValue::ExternalLinkage, Name, M);
+    F->addFnAttr(Attribute::get(M.getContext(), jeandle::Attribute::JavaMethod,
+                                std::to_string(Method)));
+  }
+  F->setCallingConv(CallingConv::Hotspot_JIT);
+  F->setGC(jeandle::JeandleGC);
+  if (IsAccessor)
+    F->addFnAttr(
+        Attribute::get(M.getContext(), jeandle::Attribute::JavaAccessorMethod));
+  return F;
+}
+
+void updateStaticOptVirtualCallAttrs(InvokeInst &CB, int PatchSize,
+                                     bool MarkMonomorphicTarget) {
+  CB.addParamAttr(0, Attribute::NoUndef);
+  CB.removeFnAttr(jeandle::Attribute::StatepointNumPatchBytes);
+  CB.addFnAttr(Attribute::get(CB.getContext(),
+                              jeandle::Attribute::StatepointNumPatchBytes,
+                              std::to_string(PatchSize)));
+  if (MarkMonomorphicTarget)
+    CB.addFnAttr(
+        Attribute::get(CB.getContext(), jeandle::Attribute::MonomorphicTarget));
+  else
+    CB.removeFnAttr(jeandle::Attribute::MonomorphicTarget);
+}
+
+void setStatepointID(CallBase &CB, uint64_t StatepointID) {
+  CB.removeFnAttr(jeandle::Attribute::StatepointID);
+  CB.addFnAttr(Attribute::get(CB.getContext(), jeandle::Attribute::StatepointID,
+                              std::to_string(StatepointID)));
+}
+
+[[noreturn]] void reportInvalidStatepointID(const CallBase &CB,
+                                            StringRef Component,
+                                            StringRef Reason) {
+  std::string Message;
+  raw_string_ostream OS(Message);
+  OS << Component << ": " << Reason;
+  if (const Function *Caller = CB.getCaller())
+    OS << " in " << Caller->getName();
+  OS << ": " << CB;
+  OS.flush();
+  report_fatal_error(StringRef(Message));
+}
 
 namespace {
 
@@ -201,50 +306,43 @@ int getCurrentDeoptBCI(const CallBase &CB) {
   return static_cast<int>(BCI->getSExtValue());
 }
 
-Function *getOrInsertJavaMethodFunction(Module &M, StringRef Name,
-                                        FunctionType *Type, uintptr_t Method,
-                                        bool IsAccessor) {
-  FunctionCallee Callee = M.getOrInsertFunction(Name, Type);
-  Function *Func = cast<Function>(Callee.getCallee());
-
-  Func->setCallingConv(CallingConv::Hotspot_JIT);
-  Func->setGC(jeandle::JeandleGC);
-  Func->addFnAttr(llvm::Attribute::get(M.getContext(),
-                                       llvm::jeandle::Attribute::JavaMethod,
-                                       std::to_string(Method)));
-  if (IsAccessor) {
-    Func->addFnAttr(
-        Attribute::get(M.getContext(), jeandle::Attribute::JavaAccessorMethod));
-  }
-  return Func;
-}
-
 uintptr_t getCurrentDeoptMethod(const CallBase &CB, uintptr_t RootMethod) {
   DeoptScopeInfo Scope = findCurrentDeoptScope(CB);
-  if (Scope.BCIPairStart == 1)
+  // Root scopes either begin with the duplicated BCI pair (legacy IR) or with
+  // an i64 should-reexecute flag followed by that pair.
+  if (Scope.BCIPairStart <= 1)
     return RootMethod;
 
-  if (Scope.BCIPairStart < 3)
-    reportInvalidDeoptBundle(CB, "missing inlinee method before bci");
-
   OperandBundleUse Deopt = *CB.getOperandBundle(LLVMContext::OB_deopt);
-  auto *Encoding =
-      dyn_cast<ConstantInt>(Deopt.Inputs[Scope.BCIPairStart - 3].get());
-  auto *Method =
-      dyn_cast<ConstantInt>(Deopt.Inputs[Scope.BCIPairStart - 2].get());
-  if (!Encoding || !Encoding->getType()->isIntegerTy(64) || !Method ||
-      !Method->getType()->isIntegerTy(64))
-    reportInvalidDeoptBundle(CB, "invalid inlinee method encoding");
+  auto DecodeMethod = [&](unsigned EncodingIndex,
+                          unsigned MethodIndex) -> uintptr_t {
+    auto *Encoding = dyn_cast<ConstantInt>(Deopt.Inputs[EncodingIndex].get());
+    auto *Method = dyn_cast<ConstantInt>(Deopt.Inputs[MethodIndex].get());
+    if (!Encoding || !Encoding->getType()->isIntegerTy(64) || !Method ||
+        !Method->getType()->isIntegerTy(64))
+      return 0;
+    const uint64_t MethodEncoding =
+        jeandle::DeoptValueEncoding(0, jeandle::DeoptValueEncoding::MethodType,
+                                    jeandle::T_METADATA)
+            .encode();
+    if (Encoding->getZExtValue() != MethodEncoding)
+      return 0;
+    return static_cast<uintptr_t>(Method->getZExtValue());
+  };
 
-  jeandle::DeoptValueEncoding DeoptInfo =
-      jeandle::DeoptValueEncoding::decode(Encoding->getZExtValue());
-  if (DeoptInfo.valueType() != jeandle::DeoptValueEncoding::MethodType)
-    reportInvalidDeoptBundle(CB, "missing MethodType marker before bci");
+  // Legacy inlinee layout: method marker, method, bci, bci.
+  if (uintptr_t Method =
+          DecodeMethod(Scope.BCIPairStart - 2, Scope.BCIPairStart - 1))
+    return Method;
 
-  uintptr_t MethodValue = static_cast<uintptr_t>(Method->getZExtValue());
-  if (MethodValue == 0)
-    reportInvalidDeoptBundle(CB, "null inlinee method");
-  return MethodValue;
+  // Current inlinee layout: method marker, method, should-reexecute, bci, bci.
+  if (Scope.BCIPairStart >= 3) {
+    if (uintptr_t Method =
+            DecodeMethod(Scope.BCIPairStart - 3, Scope.BCIPairStart - 2))
+      return Method;
+  }
+
+  reportInvalidDeoptBundle(CB, "missing inlinee method before bci");
 }
 
 static std::pair<unsigned, unsigned> computeDeoptStackLayout(CallBase &CB) {

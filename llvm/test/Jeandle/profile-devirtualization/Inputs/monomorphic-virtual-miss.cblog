@@ -1,0 +1,2 @@
+GetProfileDevirtualizationInfo 42 = "600#700#80#100#4#0#0#0#0#17#Profiled#target_0#0#"
+UpdateToStaticOptVirtualCall 42 = true
