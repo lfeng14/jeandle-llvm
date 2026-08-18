@@ -32,10 +32,6 @@ public:
 
   static constexpr const char *JavaKlassExact = "java-klass-exact";
 
-  /// Marks a call argument that remains live for the HotSpot runtime ABI even
-  /// when the visible LLVM callee does not use the corresponding parameter.
-  static constexpr const char *RuntimeLive = "runtime-live";
-
   /// Call-site attributes attached to CallBase instructions.
   ///
   /// Java bytecode invokes are emitted as InvokeInsts, while VM calls may use

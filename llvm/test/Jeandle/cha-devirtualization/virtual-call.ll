@@ -6,9 +6,11 @@
 ; parameter %recv of @caller.root is dead to LLVM.
 ;
 ; The root function is named "caller.root" while CHA devirt uses the unsuffixed
-; "caller" definition below. Its formal receiver is unused, but the opt-virtual
-; runtime stub still needs the receiver before the direct target is patched.
-; DeadArgumentElimination must therefore preserve the runtime-live operand.
+; "caller" (returned by the VM as the resolved target's MethodName). The
+; recursive invoke is therefore retargeted to a distinct @caller declaration,
+; not to the @caller.root definition. DeadArgumentElimination's
+; removeDeadArgumentsFromCallers sees @caller as a declaration (no exact
+; definition) and skips it, so the recursive call operand is preserved.
 
 @jeandle.personality = global ptr null
 @other_recv = external global ptr addrspace(1)
@@ -20,12 +22,6 @@
 declare hotspotcc i1 @jeandle.check_instanceof(ptr, ptr addrspace(1))
 declare hotspotcc i32 @Virtual_target(ptr addrspace(1)) #1 gc "hotspotgc"
 declare void @opaque_side_effect()
-
-define hotspotcc i32 @caller(ptr addrspace(1) %unused) #3 gc "hotspotgc" {
-entry:
-  call void @opaque_side_effect()
-  ret i32 1
-}
 
 define hotspotcc i32 @caller.root(ptr addrspace(1) "java-klass"="500" %recv) #0 gc "hotspotgc" personality ptr @jeandle.personality {
 entry:
@@ -51,15 +47,15 @@ unwind:
 ; CHECK: call hotspotcc i32 (...) @llvm.experimental.deoptimize.i32(i32 -201)
 ; CHECK: ret i32
 ; CHECK-LABEL: cha_bci_7_check_receiver_pass:
-; CHECK: invoke hotspotcc i32 @caller(ptr addrspace(1) noundef "runtime-live" %other) #[[CALLATTR:[0-9]+]]
+; CHECK: invoke hotspotcc i32 @caller(ptr addrspace(1) noundef %other) #[[CALLATTR:[0-9]+]]
 ; CHECK-SAME: [ "deopt"(
 ; CHECK-NOT: poison
+; CHECK: declare hotspotcc i32 @caller(ptr addrspace(1)){{.*}} gc "hotspotgc"
 ; CHECK: attributes #[[CALLATTR]] = { {{.*}}"monomorphic-target"{{.*}}"statepoint-num-patch-bytes"="5"{{.*}} }
 
 attributes #0 = { "java-method"="100" }
 attributes #1 = { "java-method"="200" }
 attributes #2 = { "bytecode"="invokevirtual" "call-site"="900" "declared-holder"="300" "statepoint-id"="42" "statepoint-num-patch-bytes"="15" }
-attributes #3 = { noinline "java-method"="100" }
 
 !java-method-compilation = !{}
 !static-call-patch-size = !{!1}
