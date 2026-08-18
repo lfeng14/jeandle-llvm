@@ -98,7 +98,12 @@ Function *getOrInsertJavaMethodFunction(Module &M, StringRef Name,
 
 void updateStaticOptVirtualCallAttrs(InvokeInst &CB, int PatchSize,
                                      bool MarkMonomorphicTarget) {
+  // The resolve_opt_virtual_call stub recovers the receiver from the Java
+  // argument-0 register before the direct target is patched. Keep it live even
+  // when the selected target does not use `this`.
   CB.addParamAttr(0, Attribute::NoUndef);
+  CB.addParamAttr(
+      0, Attribute::get(CB.getContext(), jeandle::Attribute::RuntimeLive));
   CB.removeFnAttr(jeandle::Attribute::StatepointNumPatchBytes);
   CB.addFnAttr(Attribute::get(CB.getContext(),
                               jeandle::Attribute::StatepointNumPatchBytes,
