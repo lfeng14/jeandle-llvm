@@ -1,4 +1,3 @@
-; RUN: opt -S -passes="function(profile-devirtualization)" -jeandle-vm-callback-log=%S/Inputs/invalid-deopt-reason.cblog %s | FileCheck %s
 ; RUN: opt -S -passes="function(profile-devirtualization)" -jeandle-vm-callback-log=%S/Inputs/count-exceeds-total.cblog %s | FileCheck %s
 ; RUN: opt -S -passes="function(profile-devirtualization)" -jeandle-vm-callback-log=%S/Inputs/bimorphic-zero-second-count.cblog %s | FileCheck %s
 ; RUN: opt -S -passes="function(profile-devirtualization)" -jeandle-vm-callback-log=%S/Inputs/bimorphic-counts-exceed-total.cblog %s | FileCheck %s

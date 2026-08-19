@@ -47,12 +47,15 @@ using ConstantFieldResult = std::tuple<int, int64_t>;
 /// and target method name returned by CHA devirtualization.
 using CHAOptResult = std::tuple<uintptr_t, uintptr_t, uintptr_t, std::string>;
 
-/// Receiver profile, target resolution, and speculation policy returned by
-/// profile-guided virtual-call devirtualization. The final two fields identify
-/// whether the resolved target methods are simple field accessors.
+/// A profiled receiver, its resolved method, execution count, and method name.
+using ProfileDevirtualizationTargetResult =
+    std::tuple<uintptr_t, uintptr_t, int64_t, std::string>;
+
+/// First target, total count, packed deoptimization information, miss policy,
+/// and optional second target returned by profile-guided devirtualization.
 using ProfileDevirtualizationResult =
-    std::tuple<uintptr_t, uintptr_t, int64_t, int64_t, int, bool, uintptr_t,
-               uintptr_t, int64_t, std::string, std::string, bool, bool>;
+    std::tuple<ProfileDevirtualizationTargetResult, int64_t, uintptr_t, bool,
+               ProfileDevirtualizationTargetResult>;
 
 /// Result reported for an inline attempt after LLVM starts processing it.
 /// Keep the numeric values stable because the JVM records them.
@@ -403,8 +406,9 @@ enum class JeandleInlineReason : int {
 ///                       — Queries receiver profiles and target resolution in
 ///                         the VM by statepoint id. Returns a self-contained
 ///                         monomorphic or bimorphic optimization result, or
-///                         empty if the call should remain virtual. The final
-///                         two tuple fields identify accessor target methods.
+///                         empty if the call should remain virtual. The third
+///                         field packs the deoptimization reason and accessor
+///                         bits.
 ///   UpdateToStaticOptVirtualCall
 ///                       — Updates the call site to a static opt virtual call.
 ///                         This callback has side effects on jvm side.

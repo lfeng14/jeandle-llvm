@@ -1,1 +1,1 @@
-GetProfileDevirtualizationInfo 42 = (600, 700, 101, 100, 4, 1, 0, 0, 0, "Profiled_target_0", "", 0, 0)
+GetProfileDevirtualizationInfo 42 = ((600, 700, 101, "Profiled_target_0"), 100, 16, 1, (0, 0, 0, ""))

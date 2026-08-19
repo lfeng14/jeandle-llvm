@@ -197,6 +197,35 @@ struct BimorphicCheckBlocks {
   BasicBlock *MissBlock = nullptr;
 };
 
+struct ProfileCallSiteIDs {
+  int64_t Original = -1;
+  int64_t Second = -1;
+  int64_t Miss = -1;
+};
+
+std::optional<ProfileCallSiteIDs>
+prepareCallSites(const jeandle::VMCallbacks &Callbacks, int64_t Original,
+                 bool IsBimorphic, bool CreateVirtualMiss) {
+  ProfileCallSiteIDs IDs;
+  IDs.Original = Original;
+
+  if (IsBimorphic) {
+    IDs.Second = Callbacks.GetNewStatepointID(Original);
+    if (IDs.Second < 0)
+      return std::nullopt;
+  }
+  if (CreateVirtualMiss) {
+    IDs.Miss = Callbacks.GetNewStatepointID(Original);
+    if (IDs.Miss < 0)
+      return std::nullopt;
+  }
+
+  if ((IsBimorphic && !Callbacks.UpdateToStaticOptVirtualCall(IDs.Second)) ||
+      !Callbacks.UpdateToStaticOptVirtualCall(IDs.Original))
+    return std::nullopt;
+  return IDs;
+}
+
 BimorphicCheckBlocks insertBimorphicReceiverChecks(
     Instruction &Inst, Value *Receiver, uintptr_t ReceiverKlass,
     uint64_t ProfileCount, uintptr_t ReceiverKlass2, uint64_t ProfileCount2,
@@ -345,83 +374,49 @@ bool optimizeCallSite(InvokeInst &CB, DomTreeUpdater &DTU,
     return false;
 
   int BCI = getCurrentDeoptBCI(CB);
-  auto [ReceiverKlass, TargetMethod, Count, TotalCount, DeoptReason,
-        DeoptimizeOnMiss, ReceiverKlass2, TargetMethod2, Count2,
-        TargetMethodName, TargetMethodName2, IsAccessor, IsAccessor2] =
+  jeandle::ProfileDevirtualizationInfo OptInfo(
       Callbacks.GetProfileDevirtualizationInfo(
-          static_cast<int64_t>(CallSite->StatepointID));
-  if (ReceiverKlass == 0 || TargetMethod == 0 || TargetMethodName.empty())
-    return false;
-
-  if (DeoptReason <= jeandle::Deoptimization::Reason_none ||
-      DeoptReason >= jeandle::Deoptimization::Reason_LIMIT || Count <= 0 ||
-      TotalCount <= 0 || Count > TotalCount)
+          static_cast<int64_t>(CallSite->StatepointID)));
+  if (!OptInfo.isValid())
     return false;
 
   // Keep profile devirtualization independent from the inliner. A guarded
   // direct target remains valid even if a later inline round declines it.
-  bool IsBimorphic = ReceiverKlass2 != 0;
-  if ((IsBimorphic != (TargetMethod2 != 0)) ||
-      (IsBimorphic != !TargetMethodName2.empty()) ||
-      (IsBimorphic != (Count2 > 0)))
-    return false;
-  if (!IsBimorphic && Count2 != 0)
-    return false;
-  if (IsBimorphic && Count2 > TotalCount - Count)
-    return false;
-
+  bool IsBimorphic = OptInfo.isBimorphic();
   Module &M = *CB.getModule();
   FunctionType *CallType = CB.getFunctionType();
-  if (!canGetOrInsertJavaMethodFunction(M, TargetMethodName, CallType,
-                                        TargetMethod) ||
-      (IsBimorphic && !canGetOrInsertJavaMethodFunction(
-                          M, TargetMethodName2, CallType, TargetMethod2)) ||
-      (IsBimorphic && TargetMethodName == TargetMethodName2 &&
-       TargetMethod != TargetMethod2))
+  if (!canGetOrInsertJavaMethodFunction(M, OptInfo.Target.MethodName, CallType,
+                                        OptInfo.Target.Method) ||
+      (IsBimorphic &&
+       !canGetOrInsertJavaMethodFunction(M, OptInfo.Target2.MethodName,
+                                         CallType, OptInfo.Target2.Method)) ||
+      (IsBimorphic && OptInfo.Target.MethodName == OptInfo.Target2.MethodName &&
+       OptInfo.Target.Method != OptInfo.Target2.Method))
     return false;
 
   std::optional<OperandBundleDef> PreCallDeopt;
-  if (DeoptimizeOnMiss) {
+  if (OptInfo.DeoptimizeOnMiss) {
     PreCallDeopt = createPreCallDeoptBundle(CB);
     if (!PreCallDeopt)
       return false;
   }
 
-  bool CreateVirtualMiss = !DeoptimizeOnMiss;
-  int64_t SecondStatepointID = -1;
-  int64_t MissStatepointID = -1;
-  if (IsBimorphic) {
-    SecondStatepointID = Callbacks.GetNewStatepointID(
-        static_cast<int64_t>(CallSite->StatepointID));
-    if (SecondStatepointID < 0)
-      return false;
-    if (CreateVirtualMiss) {
-      MissStatepointID = Callbacks.GetNewStatepointID(
-          static_cast<int64_t>(CallSite->StatepointID));
-      if (MissStatepointID < 0)
-        return false;
-    }
-  } else if (CreateVirtualMiss) {
-    MissStatepointID = Callbacks.GetNewStatepointID(
-        static_cast<int64_t>(CallSite->StatepointID));
-    if (MissStatepointID < 0)
-      return false;
-  }
-
-  if (IsBimorphic &&
-      !Callbacks.UpdateToStaticOptVirtualCall(SecondStatepointID))
-    return false;
-  if (!Callbacks.UpdateToStaticOptVirtualCall(
-          static_cast<int64_t>(CallSite->StatepointID)))
+  bool CreateVirtualMiss = !OptInfo.DeoptimizeOnMiss;
+  std::optional<ProfileCallSiteIDs> IDs =
+      prepareCallSites(Callbacks, static_cast<int64_t>(CallSite->StatepointID),
+                       IsBimorphic, CreateVirtualMiss);
+  if (!IDs)
     return false;
 
-  Function *Func = getOrInsertJavaMethodFunction(M, TargetMethodName, CallType,
-                                                 TargetMethod, IsAccessor);
+  Function *Func = getOrInsertJavaMethodFunction(
+      M, OptInfo.Target.MethodName, CallType, OptInfo.Target.Method,
+      OptInfo.isAccessor());
   assert(Func && "profile target was prevalidated");
   Function *Func2 = nullptr;
   if (IsBimorphic) {
-    Func2 = getOrInsertJavaMethodFunction(M, TargetMethodName2, CallType,
-                                          TargetMethod2, IsAccessor2);
+    Func2 = getOrInsertJavaMethodFunction(M, OptInfo.Target2.MethodName,
+                                          CallType, OptInfo.Target2.Method,
+                                          OptInfo.isAccessor2());
     assert(Func2 && "second profile target was prevalidated");
   }
 
@@ -430,29 +425,28 @@ bool optimizeCallSite(InvokeInst &CB, DomTreeUpdater &DTU,
   InvokeInst *SecondHitCall = nullptr;
   if (IsBimorphic) {
     BimorphicCheckBlocks Blocks = insertBimorphicReceiverChecks(
-        CB, CallSite->Receiver, ReceiverKlass, Count, ReceiverKlass2, Count2,
-        TotalCount, Prefix, DTU);
-    SecondHitCall =
-        createBimorphicCallPaths(CB, Blocks, SecondStatepointID,
-                                 MissStatepointID, CreateVirtualMiss, DTU);
-    if (DeoptimizeOnMiss) {
+        CB, CallSite->Receiver, OptInfo.Target.ReceiverKlass,
+        OptInfo.Target.Count, OptInfo.Target2.ReceiverKlass,
+        OptInfo.Target2.Count, OptInfo.TotalCount, Prefix, DTU);
+    SecondHitCall = createBimorphicCallPaths(CB, Blocks, IDs->Second, IDs->Miss,
+                                             CreateVirtualMiss, DTU);
+    if (OptInfo.DeoptimizeOnMiss) {
       IRBuilder<> MissBuilder(Blocks.MissBlock);
-      buildDeoptimize(
-          MissBuilder, *CB.getModule(),
-          static_cast<jeandle::Deoptimization::DeoptReason>(DeoptReason),
-          jeandle::Deoptimization::Action_maybe_recompile, *PreCallDeopt);
+      buildDeoptimize(MissBuilder, *CB.getModule(), OptInfo.deoptReason(),
+                      jeandle::Deoptimization::Action_maybe_recompile,
+                      *PreCallDeopt);
     }
   } else {
     BasicBlock *MissBlock = insertExactReceiverCheck(
-        CB, CallSite->Receiver, ReceiverKlass, Count, TotalCount, Prefix, DTU);
-    if (DeoptimizeOnMiss) {
+        CB, CallSite->Receiver, OptInfo.Target.ReceiverKlass,
+        OptInfo.Target.Count, OptInfo.TotalCount, Prefix, DTU);
+    if (OptInfo.DeoptimizeOnMiss) {
       IRBuilder<> MissBuilder(MissBlock);
-      buildDeoptimize(
-          MissBuilder, *CB.getModule(),
-          static_cast<jeandle::Deoptimization::DeoptReason>(DeoptReason),
-          jeandle::Deoptimization::Action_maybe_recompile, *PreCallDeopt);
+      buildDeoptimize(MissBuilder, *CB.getModule(), OptInfo.deoptReason(),
+                      jeandle::Deoptimization::Action_maybe_recompile,
+                      *PreCallDeopt);
     } else {
-      createVirtualMissPath(CB, MissBlock, MissStatepointID, DTU);
+      createVirtualMissPath(CB, MissBlock, IDs->Miss, DTU);
     }
   }
 
