@@ -48,10 +48,11 @@ using ConstantFieldResult = std::tuple<int, int64_t>;
 using CHAOptResult = std::tuple<uintptr_t, uintptr_t, uintptr_t, std::string>;
 
 /// Receiver profile, target resolution, and speculation policy returned by
-/// profile-guided virtual-call devirtualization.
+/// profile-guided virtual-call devirtualization. The final two fields identify
+/// whether the resolved target methods are simple field accessors.
 using ProfileDevirtualizationResult =
     std::tuple<uintptr_t, uintptr_t, int64_t, int64_t, int, bool, uintptr_t,
-               uintptr_t, int64_t, std::string, std::string>;
+               uintptr_t, int64_t, std::string, std::string, bool, bool>;
 
 /// Result reported for an inline attempt after LLVM starts processing it.
 /// Keep the numeric values stable because the JVM records them.
@@ -402,7 +403,8 @@ enum class JeandleInlineReason : int {
 ///                       — Queries receiver profiles and target resolution in
 ///                         the VM by statepoint id. Returns a self-contained
 ///                         monomorphic or bimorphic optimization result, or
-///                         empty if the call should remain virtual.
+///                         empty if the call should remain virtual. The final
+///                         two tuple fields identify accessor target methods.
 ///   UpdateToStaticOptVirtualCall
 ///                       — Updates the call site to a static opt virtual call.
 ///                         This callback has side effects on jvm side.

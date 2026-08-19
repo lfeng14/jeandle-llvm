@@ -48,6 +48,8 @@ unwind:
 ; CHECK: call hotspotcc i32 {{.*}}@llvm.experimental.deoptimize.i32(
 ; CHECK-LABEL: bci_profile_devirt_7_exact_receiver_0_pass:
 ; CHECK: invoke hotspotcc i32 @Profiled_target_0(
+; CHECK: declare hotspotcc i32 @Profiled_target_1(ptr addrspace(1)) #[[ACCESSOR:[0-9]+]]
+; CHECK: attributes #[[ACCESSOR:[0-9]+]] = { {{.*}}"java-accessor-method"{{.*}} }
 
 ; LOWER-LABEL: define hotspotcc i32 @caller(
 ; LOWER: [[LOWERED_ACTUAL:%.*]] = load atomic ptr, ptr addrspace(1) %recv unordered, align 8

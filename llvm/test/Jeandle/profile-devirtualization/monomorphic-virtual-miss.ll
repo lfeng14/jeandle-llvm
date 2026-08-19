@@ -46,6 +46,8 @@ unwind:
 ; CHECK: invoke hotspotcc i32 @"Profiled#target_0"(
 ; CHECK-LABEL: ret.profile.devirt.join:
 ; CHECK: phi i32
+; CHECK: declare hotspotcc i32 @"Profiled#target_0"(ptr addrspace(1)) #[[ACCESSOR:[0-9]+]]
+; CHECK: attributes #[[ACCESSOR:[0-9]+]] = { {{.*}}"java-accessor-method"{{.*}} }
 
 attributes #0 = { "java-method"="100" }
 attributes #1 = { "java-method"="200" }
