@@ -47,7 +47,7 @@ unwind:
 ; CHECK: call hotspotcc i32 (...) @llvm.experimental.deoptimize.i32(i32 -201)
 ; CHECK: ret i32
 ; CHECK-LABEL: cha_bci_7_check_receiver_pass:
-; CHECK: invoke hotspotcc i32 @caller(ptr addrspace(1) noundef "runtime-live" %other) #[[CALLATTR:[0-9]+]]
+; CHECK: invoke hotspotcc i32 @caller(ptr addrspace(1) noundef %other) #[[CALLATTR:[0-9]+]]
 ; CHECK-SAME: [ "deopt"(
 ; CHECK-NOT: poison
 ; CHECK: declare hotspotcc i32 @caller(ptr addrspace(1)){{.*}} gc "hotspotgc"

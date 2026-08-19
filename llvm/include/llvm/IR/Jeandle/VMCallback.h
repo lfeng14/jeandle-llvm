@@ -47,6 +47,12 @@ using ConstantFieldResult = std::tuple<int, int64_t>;
 /// and target method name returned by CHA devirtualization.
 using CHAOptResult = std::tuple<uintptr_t, uintptr_t, uintptr_t, std::string>;
 
+/// Receiver profile, target resolution, and speculation policy returned by
+/// profile-guided virtual-call devirtualization.
+using ProfileDevirtualizationResult =
+    std::tuple<uintptr_t, uintptr_t, int64_t, int64_t, int, bool, uintptr_t,
+               uintptr_t, int64_t, std::string, std::string>;
+
 /// Result reported for an inline attempt after LLVM starts processing it.
 /// Keep the numeric values stable because the JVM records them.
 enum class JeandleInlineReason : int {
@@ -227,7 +233,7 @@ enum class JeandleInlineReason : int {
   def(GetSignatureArgTypeKlass, uintptr_t, Uintptr,                              \
       (uintptr_t a1, int a2), (a1, a2),                                          \
       (VMCallbackValueType::Uintptr, VMCallbackValueType::Int), 2)               \
-  def(GetProfileDevirtualizationInfo, std::string, String,                       \
+  def(GetProfileDevirtualizationInfo, ProfileDevirtualizationResult, Tuple,    \
       (int64_t a1), (a1),                                                        \
       (VMCallbackValueType::Long), 1)                                            \
   def(UpdateToStaticOptVirtualCall, bool, Bool,                                  \
