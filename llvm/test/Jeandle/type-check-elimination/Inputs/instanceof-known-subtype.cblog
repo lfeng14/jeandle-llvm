@@ -13,7 +13,10 @@ IsSubtype 5 3 = false
 IsInterface 5 = false
 # Inner exact guard followed by an outer non-exact guard for klass 5.
 IsObjectKlass 5 = false
+IsSubtype 5 5 = true
 IsObjectKlass 3 = false
+IsSubtype 3 5 = false
+IsInterface 3 = false
 IsEffectivelyFinal 5 = false
 IsSubtype 5 3 = false
 IsSubtype 5 3 = false
