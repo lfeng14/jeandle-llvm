@@ -237,10 +237,10 @@ enum class JeandleInlineReason : int {
   def(GetSignatureArgTypeKlass, uintptr_t, Uintptr,                              \
       (uintptr_t a1, int a2), (a1, a2),                                          \
       (VMCallbackValueType::Uintptr, VMCallbackValueType::Int), 2)               \
-  def(GetProfileDevirtualizationInfo, ProfileDevirtualizationResult, Tuple,    \
-      (uintptr_t a1, uintptr_t a2, uintptr_t a3, int a4, int a5),              \
+  def(GetProfileDevirtualizationInfo, ProfileDevirtualizationResult, Tuple,      \
+      (uintptr_t a1, uintptr_t a2, uintptr_t a3, int a4, int a5),                \
       (a1, a2, a3, a4, a5),                                                     \
-      (VMCallbackValueType::Uintptr, VMCallbackValueType::Uintptr,              \
+      (VMCallbackValueType::Uintptr, VMCallbackValueType::Uintptr,               \
        VMCallbackValueType::Uintptr, VMCallbackValueType::Int,                   \
        VMCallbackValueType::Int), 5)                                             \
   def(UpdateToStaticOptVirtualCall, bool, Bool,                                  \

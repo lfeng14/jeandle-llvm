@@ -453,8 +453,7 @@ bool optimizeCallSite(InvokeInst &CB, DomTreeUpdater &DTU,
     }
   }
 
-  updateStaticOptVirtualCallAttrs(CB, PatchSize,
-                                  !EnableProfileDevirtInlining);
+  updateStaticOptVirtualCallAttrs(CB, PatchSize, !EnableProfileDevirtInlining);
   CB.setCalledFunction(Func);
 
   if (SecondHitCall) {
