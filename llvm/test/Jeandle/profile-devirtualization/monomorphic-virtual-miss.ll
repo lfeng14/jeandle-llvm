@@ -24,7 +24,9 @@ declare hotspotcc i32 @Virtual_target(ptr addrspace(1)) #1 gc "hotspotgc"
 
 define hotspotcc i32 @caller(ptr addrspace(1) %recv) #0 gc "hotspotgc" personality ptr @jeandle.personality {
 entry:
-  %ret = invoke hotspotcc i32 @Virtual_target(ptr addrspace(1) %recv) #2 [ "deopt"(i64 0, i32 7, i32 7) ]
+  ; Root scope followed by a current-layout inlinee scope. Profile lookup must
+  ; use method 400 from the innermost scope, not root method 100.
+  %ret = invoke hotspotcc i32 @Virtual_target(ptr addrspace(1) %recv) #2 [ "deopt"(i64 0, i32 0, i32 0, i64 393233, i64 400, i64 0, i32 7, i32 7) ]
           to label %normal unwind label %unwind
 
 normal:

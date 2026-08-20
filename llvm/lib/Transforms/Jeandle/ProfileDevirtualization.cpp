@@ -360,7 +360,8 @@ createBimorphicCallPaths(InvokeInst &CB, const BimorphicCheckBlocks &Blocks,
 }
 
 bool optimizeCallSite(InvokeInst &CB, DomTreeUpdater &DTU,
-                      const jeandle::VMCallbacks &Callbacks, int PatchSize) {
+                      const jeandle::VMCallbacks &Callbacks, int PatchSize,
+                      uintptr_t RootCaller) {
   // Do not recursively guard a fallback created by an earlier round.
   if (CB.getAttributes().hasFnAttr(
           jeandle::Attribute::ProfileDevirtualizationMiss))
@@ -373,10 +374,12 @@ bool optimizeCallSite(InvokeInst &CB, DomTreeUpdater &DTU,
   if (!CallSite)
     return false;
 
+  uintptr_t ScopeCaller = getCurrentDeoptMethod(CB, RootCaller);
   int BCI = getCurrentDeoptBCI(CB);
   jeandle::ProfileDevirtualizationInfo OptInfo(
       Callbacks.GetProfileDevirtualizationInfo(
-          static_cast<int64_t>(CallSite->StatepointID)));
+          ScopeCaller, CallSite->CalleeMethod, CallSite->DeclaredHolder, BCI,
+          static_cast<int>(CallSite->InvokeKind)));
   if (!OptInfo.isValid())
     return false;
 
@@ -494,7 +497,7 @@ PreservedAnalyses ProfileDevirtualization::run(Function &F,
   bool Changed = false;
   int PatchSize = getStaticCallPatchSize(*F.getParent());
   for (InvokeInst *CB : Calls)
-    Changed |= optimizeCallSite(*CB, DTU, *Callbacks, PatchSize);
+    Changed |= optimizeCallSite(*CB, DTU, *Callbacks, PatchSize, Caller);
 
   if (!Changed)
     return PreservedAnalyses::all();

@@ -238,8 +238,11 @@ enum class JeandleInlineReason : int {
       (uintptr_t a1, int a2), (a1, a2),                                          \
       (VMCallbackValueType::Uintptr, VMCallbackValueType::Int), 2)               \
   def(GetProfileDevirtualizationInfo, ProfileDevirtualizationResult, Tuple,    \
-      (int64_t a1), (a1),                                                        \
-      (VMCallbackValueType::Long), 1)                                            \
+      (uintptr_t a1, uintptr_t a2, uintptr_t a3, int a4, int a5),              \
+      (a1, a2, a3, a4, a5),                                                     \
+      (VMCallbackValueType::Uintptr, VMCallbackValueType::Uintptr,              \
+       VMCallbackValueType::Uintptr, VMCallbackValueType::Int,                   \
+       VMCallbackValueType::Int), 5)                                             \
   def(UpdateToStaticOptVirtualCall, bool, Bool,                                  \
       (int64_t a1), (a1),                                                        \
       (VMCallbackValueType::Long), 1)
@@ -404,7 +407,8 @@ enum class JeandleInlineReason : int {
 ///                       — Updates the call site to given destination.
 ///   GetProfileDevirtualizationInfo
 ///                       — Queries receiver profiles and target resolution in
-///                         the VM by statepoint id. Returns a self-contained
+///                         the VM using the call-site's inline scope and
+///                         bytecode context. Returns a self-contained
 ///                         monomorphic or bimorphic optimization result, or
 ///                         empty if the call should remain virtual. The third
 ///                         field packs the deoptimization reason and accessor
