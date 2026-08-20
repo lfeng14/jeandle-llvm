@@ -475,6 +475,8 @@ PreservedAnalyses ProfileDevirtualization::run(Function &F,
   Module *M = F.getParent();
   if (!M->getNamedMetadata(jeandle::Metadata::JavaMethodCompilation))
     return PreservedAnalyses::all();
+  if (!jeandle::isRootJavaMethodFunction(F))
+    return PreservedAnalyses::all();
 
   const jeandle::VMCallbacks *Callbacks = jeandle::getVMCallbacks();
   assert(Callbacks && Callbacks->GetProfileDevirtualizationInfo &&
