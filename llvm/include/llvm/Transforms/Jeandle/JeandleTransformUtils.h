@@ -112,10 +112,10 @@ std::optional<JavaVirtualCallSite> getJavaVirtualCallSite(InvokeInst &CB);
 int getStaticCallPatchSize(const Module &M);
 
 /// Rewrites a virtual invoke's call-site attributes for an optimized virtual
-/// call. Profile-guided callers may leave \p MarkMonomorphicTarget false when
-/// the guarded direct call should not be considered by the inliner.
+/// call. \p MarkNoInline prevents the guarded direct call from being considered
+/// by the inliner without removing its monomorphic-target marker.
 void updateStaticOptVirtualCallAttrs(InvokeInst &CB, int PatchSize,
-                                     bool MarkMonomorphicTarget = true);
+                                     bool MarkNoInline = false);
 
 /// Replaces the statepoint id carried by a call site.
 void setStatepointID(CallBase &CB, uint64_t StatepointID);

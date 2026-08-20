@@ -453,12 +453,13 @@ bool optimizeCallSite(InvokeInst &CB, DomTreeUpdater &DTU,
     }
   }
 
-  updateStaticOptVirtualCallAttrs(CB, PatchSize, EnableProfileDevirtInlining);
+  updateStaticOptVirtualCallAttrs(CB, PatchSize,
+                                  !EnableProfileDevirtInlining);
   CB.setCalledFunction(Func);
 
   if (SecondHitCall) {
     updateStaticOptVirtualCallAttrs(*SecondHitCall, PatchSize,
-                                    EnableProfileDevirtInlining);
+                                    !EnableProfileDevirtInlining);
     SecondHitCall->setCalledFunction(Func2);
   }
   LLVM_DEBUG(dbgs() << "Profile devirtualized " << CB;

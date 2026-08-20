@@ -97,17 +97,16 @@ Function *getOrInsertJavaMethodFunction(Module &M, StringRef Name,
 }
 
 void updateStaticOptVirtualCallAttrs(InvokeInst &CB, int PatchSize,
-                                     bool MarkMonomorphicTarget) {
+                                     bool MarkNoInline) {
   CB.addParamAttr(0, Attribute::NoUndef);
   CB.removeFnAttr(jeandle::Attribute::StatepointNumPatchBytes);
   CB.addFnAttr(Attribute::get(CB.getContext(),
                               jeandle::Attribute::StatepointNumPatchBytes,
                               std::to_string(PatchSize)));
-  if (MarkMonomorphicTarget)
-    CB.addFnAttr(
-        Attribute::get(CB.getContext(), jeandle::Attribute::MonomorphicTarget));
-  else
-    CB.removeFnAttr(jeandle::Attribute::MonomorphicTarget);
+  CB.addFnAttr(
+      Attribute::get(CB.getContext(), jeandle::Attribute::MonomorphicTarget));
+  if (MarkNoInline)
+    CB.setIsNoInline();
 }
 
 void setStatepointID(CallBase &CB, uint64_t StatepointID) {

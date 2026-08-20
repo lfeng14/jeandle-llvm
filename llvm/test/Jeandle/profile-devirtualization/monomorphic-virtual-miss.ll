@@ -1,4 +1,5 @@
 ; RUN: opt -S -passes="function(profile-devirtualization)" -jeandle-vm-callback-log=%S/Inputs/monomorphic-virtual-miss.cblog %s 2>&1 | FileCheck %s
+; RUN: opt -S -passes="function(profile-devirtualization),function(profile-devirtualization)" -jeandle-enable-profile-devirt-inline=false -jeandle-vm-callback-log=%S/Inputs/monomorphic-virtual-miss.cblog %s 2>&1 | FileCheck %s
 
 ; A mature monomorphic profile with prior traps keeps a guarded direct-call
 ; fast path, but falls back to the original virtual invoke instead of
