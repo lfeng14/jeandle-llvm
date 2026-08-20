@@ -22,6 +22,7 @@
 #include "llvm/Transforms/Jeandle/JeandleNarrowOopMarker.h"
 #include "llvm/Transforms/Jeandle/PartialEscapeIterative.h"
 #include "llvm/Transforms/Jeandle/PartialEscapeTransform.h"
+#include "llvm/Transforms/Jeandle/ProfileDevirtualization.h"
 #include "llvm/Transforms/Jeandle/RecoverTypeInfo.h"
 #include "llvm/Transforms/Jeandle/RepeatedConstantFolding.h"
 #include "llvm/Transforms/Jeandle/SafepointCoverageVerifier.h"
@@ -156,6 +157,7 @@ ModulePassManager Pipeline::buildJeandlePipeline(PassBuilder &PB,
   PM.addPass(createModuleToFunctionPassAdaptor(std::move(PreCHACleanup)));
   PM.addPass(createModuleToFunctionPassAdaptor(RecoverTypeInfo()));
   PM.addPass(createModuleToFunctionPassAdaptor(CHADevirtualization()));
+  PM.addPass(createModuleToFunctionPassAdaptor(ProfileDevirtualization()));
   // JeandleInlineDriver owns the inline-specific loop. Devirtualization
   // refinement between inline rounds should be wired inside the driver so
   // inline-scope state can be preserved across IR rewrites. Stub compilation

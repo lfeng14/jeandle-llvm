@@ -47,6 +47,16 @@ using ConstantFieldResult = std::tuple<int, int64_t>;
 /// and target method name returned by CHA devirtualization.
 using CHAOptResult = std::tuple<uintptr_t, uintptr_t, uintptr_t, std::string>;
 
+/// A profiled receiver, its resolved method, execution count, and method name.
+using ProfileDevirtualizationTargetResult =
+    std::tuple<uintptr_t, uintptr_t, int64_t, std::string>;
+
+/// First target, total count, packed deoptimization information, miss policy,
+/// and optional second target returned by profile-guided devirtualization.
+using ProfileDevirtualizationResult =
+    std::tuple<ProfileDevirtualizationTargetResult, int64_t, uintptr_t, bool,
+               ProfileDevirtualizationTargetResult>;
+
 /// Result reported for an inline attempt after LLVM starts processing it.
 /// Keep the numeric values stable because the JVM records them.
 enum class JeandleInlineReason : int {
@@ -226,7 +236,16 @@ enum class JeandleInlineReason : int {
       (VMCallbackValueType::Uintptr, VMCallbackValueType::Int), 2)               \
   def(GetSignatureArgTypeKlass, uintptr_t, Uintptr,                              \
       (uintptr_t a1, int a2), (a1, a2),                                          \
-      (VMCallbackValueType::Uintptr, VMCallbackValueType::Int), 2)
+      (VMCallbackValueType::Uintptr, VMCallbackValueType::Int), 2)               \
+  def(GetProfileDevirtualizationInfo, ProfileDevirtualizationResult, Tuple,    \
+      (uintptr_t a1, uintptr_t a2, uintptr_t a3, int a4, int a5),              \
+      (a1, a2, a3, a4, a5),                                                     \
+      (VMCallbackValueType::Uintptr, VMCallbackValueType::Uintptr,              \
+       VMCallbackValueType::Uintptr, VMCallbackValueType::Int,                   \
+       VMCallbackValueType::Int), 5)                                             \
+  def(UpdateToStaticOptVirtualCall, bool, Bool,                                  \
+      (int64_t a1), (a1),                                                        \
+      (VMCallbackValueType::Long), 1)
 // clang-format on
 
 // =============================================================================
@@ -386,6 +405,16 @@ enum class JeandleInlineReason : int {
 ///                         means the call site cannot be optimized.
 ///   UpdateCallSite
 ///                       — Updates the call site to given destination.
+///   GetProfileDevirtualizationInfo
+///                       — Queries receiver profiles and target resolution in
+///                         the VM using the call-site's inline scope and
+///                         bytecode context. Returns a self-contained
+///                         monomorphic or bimorphic optimization result, or
+///                         empty if the call should remain virtual. The third
+///                         field packs the deoptimization reason and accessor
+///                         bits.
+///   UpdateToStaticOptVirtualCall
+///                       — Updates the call site to a static opt virtual call.
 ///                         This callback has side effects on jvm side.
 ///   GetSignatureAccessingKlass
 ///                       — Returns the signature accessing klass as a Klass

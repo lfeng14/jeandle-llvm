@@ -68,6 +68,10 @@ public:
   static constexpr const char *MhIntrinsicName = "mh-intrinsic-name";
 
   static constexpr const char *MonomorphicTarget = "monomorphic-target";
+
+  /// Marks virtual fallback calls that must not be profile-devirtualized again.
+  static constexpr const char *ProfileDevirtualizationMiss =
+      "profile-devirtualization-miss";
 };
 
 } // namespace llvm::jeandle
