@@ -102,10 +102,9 @@ static bool matchesExactDumpFunction(StringRef FunctionName) {
       Candidate = Candidate.drop_back(RootSuffix.size());
       StableName = StableName.drop_back(RootSuffix.size());
     }
-    if (!Candidate.consume_front(StableName) ||
-        !Candidate.consume_front(".") || Candidate.empty() ||
-        !llvm::all_of(Candidate,
-                      [](char C) { return C >= '0' && C <= '9'; }))
+    if (!Candidate.consume_front(StableName) || !Candidate.consume_front(".") ||
+        Candidate.empty() ||
+        !llvm::all_of(Candidate, [](char C) { return C >= '0' && C <= '9'; }))
       continue;
     return true;
   }
