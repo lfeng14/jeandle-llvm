@@ -206,16 +206,40 @@ static llvm::cl::opt<std::string> JeandleEscapeAnalyzeOnly(
 static llvm::cl::list<std::string> JeandleEscapeAnalyzeFunctions(
     "jeandle-pea-analyze-function", llvm::cl::Hidden,
     llvm::cl::desc("PEA: only analyze functions whose name exactly matches "
-                   "one of the supplied names. May be repeated. Empty (the "
-                   "default) preserves substring-filter behavior."),
+                   "one of the supplied names. At runtime, a numeric method "
+                   "identity suffix is also accepted. May be repeated. Empty "
+                   "(the default) preserves substring-filter behavior."),
     llvm::cl::value_desc("function"));
 
 static bool matchesExactAnalyzeFunction(llvm::StringRef FunctionName) {
   if (JeandleEscapeAnalyzeFunctions.empty())
     return true;
-  for (const std::string &Allowed : JeandleEscapeAnalyzeFunctions)
-    if (FunctionName == llvm::StringRef(Allowed))
+  for (const std::string &Allowed : JeandleEscapeAnalyzeFunctions) {
+    StringRef AllowedName(Allowed);
+    if (FunctionName == AllowedName)
       return true;
+
+    // JDK-generated symbols append a numeric ciMethod identity. Try the stable
+    // name first, then accept that runtime suffix.
+    constexpr StringLiteral RootSuffix = ".root";
+    bool FunctionIsRoot = FunctionName.ends_with(RootSuffix);
+    bool AllowedIsRoot = AllowedName.ends_with(RootSuffix);
+    if (FunctionIsRoot != AllowedIsRoot)
+      continue;
+
+    StringRef Candidate = FunctionName;
+    StringRef StableName = AllowedName;
+    if (FunctionIsRoot) {
+      Candidate = Candidate.drop_back(RootSuffix.size());
+      StableName = StableName.drop_back(RootSuffix.size());
+    }
+    if (!Candidate.consume_front(StableName) ||
+        !Candidate.consume_front(".") || Candidate.empty() ||
+        !llvm::all_of(Candidate,
+                      [](char C) { return C >= '0' && C <= '9'; }))
+      continue;
+    return true;
+  }
   return false;
 }
 
