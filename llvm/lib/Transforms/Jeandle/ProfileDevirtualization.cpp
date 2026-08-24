@@ -68,6 +68,42 @@ void setBranchWeights(BranchInst &Branch, uint64_t TakenCount,
   llvm::setBranchWeights(Branch, Weights, /*IsExpected=*/false);
 }
 
+struct ExactReceiverCheckContext {
+  Function *LoadKlass = nullptr;
+  Function *CheckExactKlass = nullptr;
+  PointerType *KlassType = nullptr;
+};
+
+ExactReceiverCheckContext getExactReceiverCheckContext(Instruction &Inst) {
+  Module *M = Inst.getModule();
+  Function *LoadKlass = M->getFunction("jeandle.load_klass");
+  Function *CheckExactKlass = M->getFunction("jeandle.check_exact_klass");
+  assert(LoadKlass && CheckExactKlass &&
+         "exact receiver check intrinsics must be present");
+  return {
+      LoadKlass, CheckExactKlass,
+      PointerType::get(Inst.getContext(), jeandle::AddrSpace::CHeapAddrSpace)};
+}
+
+CallInst *loadReceiverKlass(IRBuilder<> &Builder, Function *LoadKlass,
+                            Value *Receiver, const Twine &Name) {
+  CallInst *ActualKlass = Builder.CreateCall(LoadKlass, {Receiver}, Name);
+  ActualKlass->setCallingConv(CallingConv::Hotspot_JIT);
+  return ActualKlass;
+}
+
+CallInst *checkExactReceiverKlass(IRBuilder<> &Builder,
+                                  const ExactReceiverCheckContext &Checks,
+                                  Value *ActualKlass, uintptr_t ReceiverKlass,
+                                  const Twine &Name) {
+  Value *ExpectedKlass =
+      Builder.CreateIntToPtr(Builder.getInt64(ReceiverKlass), Checks.KlassType);
+  CallInst *IsExact = Builder.CreateCall(Checks.CheckExactKlass,
+                                         {ExpectedKlass, ActualKlass}, Name);
+  IsExact->setCallingConv(CallingConv::Hotspot_JIT);
+  return IsExact;
+}
+
 /// Clones a Java invoke onto a newly created path and gives the clone a unique
 /// statepoint id. The original call-site attributes and deopt state are kept so
 /// code generation can describe the same Java frame on every path.
@@ -157,11 +193,7 @@ BasicBlock *insertExactReceiverCheck(Instruction &Inst, Value *Receiver,
   assert(Receiver->getType()->isPointerTy() && "Receiver must be a pointer");
 
   BasicBlock *BB = Inst.getParent();
-  Module *M = Inst.getModule();
-  Function *LoadKlassFn = M->getFunction("jeandle.load_klass");
-  Function *CheckExactKlassFn = M->getFunction("jeandle.check_exact_klass");
-  assert(LoadKlassFn && CheckExactKlassFn &&
-         "exact receiver check intrinsics must be present");
+  ExactReceiverCheckContext Checks = getExactReceiverCheckContext(Inst);
 
   LLVMContext &Context = Inst.getContext();
   BasicBlock *CheckPass = SplitBlock(BB, &Inst, &DTU, nullptr, nullptr,
@@ -172,16 +204,10 @@ BasicBlock *insertExactReceiverCheck(Instruction &Inst, Value *Receiver,
   BB->getTerminator()->eraseFromParent();
   IRBuilder<> Builder(BB);
 
-  CallInst *ActualKlass =
-      Builder.CreateCall(LoadKlassFn, {Receiver}, Prefix + "_actual_klass");
-  ActualKlass->setCallingConv(CallingConv::Hotspot_JIT);
-  PointerType *KlassTy =
-      PointerType::get(Context, jeandle::AddrSpace::CHeapAddrSpace);
-  Value *ExpectedKlass =
-      Builder.CreateIntToPtr(Builder.getInt64(ReceiverKlass), KlassTy);
-  CallInst *IsProfiledReceiver = Builder.CreateCall(
-      CheckExactKlassFn, {ExpectedKlass, ActualKlass}, Prefix + "_is_exact_0");
-  IsProfiledReceiver->setCallingConv(CallingConv::Hotspot_JIT);
+  CallInst *ActualKlass = loadReceiverKlass(Builder, Checks.LoadKlass, Receiver,
+                                            Prefix + "_actual_klass");
+  CallInst *IsProfiledReceiver = checkExactReceiverKlass(
+      Builder, Checks, ActualKlass, ReceiverKlass, Prefix + "_is_exact_0");
   BranchInst *Guard =
       Builder.CreateCondBr(IsProfiledReceiver, CheckPass, CheckFail);
   setBranchWeights(*Guard, ProfileCount, ProfileTotalCount);
@@ -233,11 +259,7 @@ BimorphicCheckBlocks insertBimorphicReceiverChecks(
   assert(ReceiverKlass2 != 0 && "second receiver must be present");
 
   BasicBlock *BB = Inst.getParent();
-  Module *M = Inst.getModule();
-  Function *LoadKlassFn = M->getFunction("jeandle.load_klass");
-  Function *CheckExactKlassFn = M->getFunction("jeandle.check_exact_klass");
-  assert(LoadKlassFn && CheckExactKlassFn &&
-         "exact receiver check intrinsics must be present");
+  ExactReceiverCheckContext Checks = getExactReceiverCheckContext(Inst);
 
   LLVMContext &Context = Inst.getContext();
   BasicBlock *FirstHitBlock = SplitBlock(BB, &Inst, &DTU, nullptr, nullptr,
@@ -253,26 +275,18 @@ BimorphicCheckBlocks insertBimorphicReceiverChecks(
 
   BB->getTerminator()->eraseFromParent();
   IRBuilder<> Builder(BB);
-  CallInst *ActualKlass =
-      Builder.CreateCall(LoadKlassFn, {Receiver}, Prefix + "_actual_klass");
-  ActualKlass->setCallingConv(CallingConv::Hotspot_JIT);
-  PointerType *KlassTy =
-      PointerType::get(Context, jeandle::AddrSpace::CHeapAddrSpace);
-  Value *ExpectedKlass =
-      Builder.CreateIntToPtr(Builder.getInt64(ReceiverKlass), KlassTy);
-  CallInst *IsReceiver = Builder.CreateCall(
-      CheckExactKlassFn, {ExpectedKlass, ActualKlass}, Prefix + "_is_exact_0");
-  IsReceiver->setCallingConv(CallingConv::Hotspot_JIT);
+  CallInst *ActualKlass = loadReceiverKlass(Builder, Checks.LoadKlass, Receiver,
+                                            Prefix + "_actual_klass");
+  CallInst *IsReceiver = checkExactReceiverKlass(
+      Builder, Checks, ActualKlass, ReceiverKlass, Prefix + "_is_exact_0");
   BranchInst *FirstGuard =
       Builder.CreateCondBr(IsReceiver, FirstHitBlock, SecondCheckBlock);
   setBranchWeights(*FirstGuard, ProfileCount, ProfileTotalCount);
 
   IRBuilder<> SecondBuilder(SecondCheckBlock);
-  Value *ExpectedKlass2 = SecondBuilder.CreateIntToPtr(
-      SecondBuilder.getInt64(ReceiverKlass2), KlassTy);
-  CallInst *IsReceiver2 = SecondBuilder.CreateCall(
-      CheckExactKlassFn, {ExpectedKlass2, ActualKlass}, Prefix + "_is_exact_1");
-  IsReceiver2->setCallingConv(CallingConv::Hotspot_JIT);
+  CallInst *IsReceiver2 =
+      checkExactReceiverKlass(SecondBuilder, Checks, ActualKlass,
+                              ReceiverKlass2, Prefix + "_is_exact_1");
   BranchInst *SecondGuard =
       SecondBuilder.CreateCondBr(IsReceiver2, SecondHitBlock, MissBlock);
   uint64_t RemainingCount =
