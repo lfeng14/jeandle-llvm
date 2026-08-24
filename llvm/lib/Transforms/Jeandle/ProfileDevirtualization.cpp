@@ -104,6 +104,59 @@ CallInst *checkExactReceiverKlass(IRBuilder<> &Builder,
   return IsExact;
 }
 
+BasicBlock *createProfileJoinBlock(InvokeInst &CB) {
+  BasicBlock *HitBlock = CB.getParent();
+  BasicBlock *OriginalNormalDest = CB.getNormalDest();
+  BasicBlock *JoinBlock =
+      BasicBlock::Create(CB.getContext(), CB.getName() + ".profile.devirt.join",
+                         HitBlock->getParent(), OriginalNormalDest);
+  BranchInst::Create(OriginalNormalDest, JoinBlock);
+
+  for (PHINode &Phi : OriginalNormalDest->phis())
+    for (unsigned I = 0, E = Phi.getNumIncomingValues(); I != E; ++I)
+      if (Phi.getIncomingBlock(I) == HitBlock)
+        Phi.setIncomingBlock(I, JoinBlock);
+  CB.setNormalDest(JoinBlock);
+  return JoinBlock;
+}
+
+void addInvokeUnwindEdges(InvokeInst &CB, BasicBlock *HitBlock,
+                          ArrayRef<BasicBlock *> ExtraBlocks) {
+  BasicBlock *UnwindDest = CB.getUnwindDest();
+  for (PHINode &Phi : UnwindDest->phis()) {
+    int HitIndex = Phi.getBasicBlockIndex(HitBlock);
+    assert(HitIndex >= 0 && "unwind phi must contain the original invoke edge");
+    Value *Incoming = Phi.getIncomingValue(HitIndex);
+    for (BasicBlock *ExtraBlock : ExtraBlocks)
+      Phi.addIncoming(Incoming, ExtraBlock);
+  }
+}
+
+void mergeInvokeResults(InvokeInst &CB, BasicBlock *HitBlock,
+                        BasicBlock *JoinBlock, Value *SecondValue,
+                        BasicBlock *SecondBlock, Value *MissValue,
+                        BasicBlock *MissBlock) {
+  if (CB.getType()->isVoidTy() || CB.use_empty())
+    return;
+
+  unsigned NumIncoming = 1 + (SecondValue != nullptr) + (MissValue != nullptr);
+  PHINode *Result = PHINode::Create(CB.getType(), NumIncoming,
+                                    CB.getName() + ".profile.devirt",
+                                    JoinBlock->getFirstInsertionPt());
+  Result->addIncoming(&CB, HitBlock);
+  if (SecondValue != nullptr)
+    Result->addIncoming(SecondValue, SecondBlock);
+  if (MissValue != nullptr)
+    Result->addIncoming(MissValue, MissBlock);
+
+  SmallVector<Use *, 8> Uses;
+  for (Use &U : CB.uses())
+    if (U.getUser() != Result)
+      Uses.push_back(&U);
+  for (Use *U : Uses)
+    U->set(Result);
+}
+
 /// Clones a Java invoke onto a newly created path and gives the clone a unique
 /// statepoint id. The original call-site attributes and deopt state are kept so
 /// code generation can describe the same Java frame on every path.
@@ -138,43 +191,16 @@ void createVirtualMissPath(InvokeInst &CB, BasicBlock *MissBlock,
   BasicBlock *HitBlock = CB.getParent();
   BasicBlock *OriginalNormalDest = CB.getNormalDest();
   BasicBlock *UnwindDest = CB.getUnwindDest();
-  BasicBlock *JoinBlock =
-      BasicBlock::Create(CB.getContext(), CB.getName() + ".profile.devirt.join",
-                         HitBlock->getParent(), OriginalNormalDest);
-  BranchInst::Create(OriginalNormalDest, JoinBlock);
-
-  for (PHINode &Phi : OriginalNormalDest->phis())
-    for (unsigned I = 0, E = Phi.getNumIncomingValues(); I != E; ++I)
-      if (Phi.getIncomingBlock(I) == HitBlock)
-        Phi.setIncomingBlock(I, JoinBlock);
-
-  CB.setNormalDest(JoinBlock);
+  BasicBlock *JoinBlock = createProfileJoinBlock(CB);
 
   // Prevent a later refinement round from guarding this fallback again.
   InvokeInst *Miss = cloneInvokeWithFreshStatepoint(CB, *MissBlock, JoinBlock,
                                                     MissStatepointID,
                                                     /*MarkProfileMiss=*/true);
 
-  for (PHINode &Phi : UnwindDest->phis()) {
-    int HitIndex = Phi.getBasicBlockIndex(HitBlock);
-    assert(HitIndex >= 0 && "unwind phi must contain the original invoke edge");
-    Phi.addIncoming(Phi.getIncomingValue(HitIndex), MissBlock);
-  }
-
-  if (!CB.getType()->isVoidTy() && !CB.use_empty()) {
-    PHINode *Result =
-        PHINode::Create(CB.getType(), 2, CB.getName() + ".profile.devirt",
-                        JoinBlock->getFirstInsertionPt());
-    Result->addIncoming(&CB, HitBlock);
-    Result->addIncoming(Miss, MissBlock);
-
-    SmallVector<Use *, 8> Uses;
-    for (Use &U : CB.uses())
-      if (U.getUser() != Result)
-        Uses.push_back(&U);
-    for (Use *U : Uses)
-      U->set(Result);
-  }
+  addInvokeUnwindEdges(CB, HitBlock, {MissBlock});
+  mergeInvokeResults(CB, HitBlock, JoinBlock, nullptr, nullptr, Miss,
+                     MissBlock);
 
   DTU.applyUpdates({{DominatorTree::Delete, HitBlock, OriginalNormalDest},
                     {DominatorTree::Insert, HitBlock, JoinBlock},
@@ -309,16 +335,7 @@ createBimorphicCallPaths(InvokeInst &CB, const BimorphicCheckBlocks &Blocks,
   BasicBlock *FirstHitBlock = CB.getParent();
   BasicBlock *OriginalNormalDest = CB.getNormalDest();
   BasicBlock *UnwindDest = CB.getUnwindDest();
-  BasicBlock *JoinBlock =
-      BasicBlock::Create(CB.getContext(), CB.getName() + ".profile.devirt.join",
-                         FirstHitBlock->getParent(), OriginalNormalDest);
-  BranchInst::Create(OriginalNormalDest, JoinBlock);
-
-  for (PHINode &Phi : OriginalNormalDest->phis())
-    for (unsigned I = 0, E = Phi.getNumIncomingValues(); I != E; ++I)
-      if (Phi.getIncomingBlock(I) == FirstHitBlock)
-        Phi.setIncomingBlock(I, JoinBlock);
-  CB.setNormalDest(JoinBlock);
+  BasicBlock *JoinBlock = createProfileJoinBlock(CB);
 
   InvokeInst *SecondHitCall = cloneInvokeWithFreshStatepoint(
       CB, *Blocks.SecondHitBlock, JoinBlock, SecondStatepointID,
@@ -330,32 +347,14 @@ createBimorphicCallPaths(InvokeInst &CB, const BimorphicCheckBlocks &Blocks,
                                               MissStatepointID,
                                               /*MarkProfileMiss=*/true);
 
-  for (PHINode &Phi : UnwindDest->phis()) {
-    int FirstHitIndex = Phi.getBasicBlockIndex(FirstHitBlock);
-    assert(FirstHitIndex >= 0 &&
-           "unwind phi must contain the original invoke edge");
-    Value *Incoming = Phi.getIncomingValue(FirstHitIndex);
-    Phi.addIncoming(Incoming, Blocks.SecondHitBlock);
-    if (MissCall)
-      Phi.addIncoming(Incoming, Blocks.MissBlock);
+  if (MissCall) {
+    addInvokeUnwindEdges(CB, FirstHitBlock,
+                         {Blocks.SecondHitBlock, Blocks.MissBlock});
+  } else {
+    addInvokeUnwindEdges(CB, FirstHitBlock, {Blocks.SecondHitBlock});
   }
-
-  if (!CB.getType()->isVoidTy() && !CB.use_empty()) {
-    PHINode *Result = PHINode::Create(CB.getType(), MissCall ? 3 : 2,
-                                      CB.getName() + ".profile.devirt",
-                                      JoinBlock->getFirstInsertionPt());
-    Result->addIncoming(&CB, FirstHitBlock);
-    Result->addIncoming(SecondHitCall, Blocks.SecondHitBlock);
-    if (MissCall)
-      Result->addIncoming(MissCall, Blocks.MissBlock);
-
-    SmallVector<Use *, 8> Uses;
-    for (Use &U : CB.uses())
-      if (U.getUser() != Result)
-        Uses.push_back(&U);
-    for (Use *U : Uses)
-      U->set(Result);
-  }
+  mergeInvokeResults(CB, FirstHitBlock, JoinBlock, SecondHitCall,
+                     Blocks.SecondHitBlock, MissCall, Blocks.MissBlock);
 
   SmallVector<DominatorTree::UpdateType, 8> Updates = {
       {DominatorTree::Delete, FirstHitBlock, OriginalNormalDest},
