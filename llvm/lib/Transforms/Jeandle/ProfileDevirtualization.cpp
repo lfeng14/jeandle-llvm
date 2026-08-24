@@ -29,8 +29,8 @@
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/Jeandle/VMCallback.h"
-#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/ProfDataUtils.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Jeandle/JeandleTransformUtils.h"
@@ -53,20 +53,19 @@ namespace {
 
 void setBranchWeights(BranchInst &Branch, uint64_t TakenCount,
                       uint64_t TotalCount) {
-  uint64_t TakenWeight = std::max<uint64_t>(TakenCount, 1);
-  uint64_t NotTakenWeight = std::max<uint64_t>(
-      TotalCount > TakenCount ? TotalCount - TakenCount : 1, 1);
-  uint64_t MaxWeight = std::max(TakenWeight, NotTakenWeight);
-  if (MaxWeight > UINT32_MAX) {
-    TakenWeight = std::max<uint64_t>(TakenWeight * UINT32_MAX / MaxWeight, 1);
-    NotTakenWeight =
-        std::max<uint64_t>(NotTakenWeight * UINT32_MAX / MaxWeight, 1);
+  SmallVector<uint64_t, 2> Counts = {
+      std::max<uint64_t>(TakenCount, 1),
+      std::max<uint64_t>(TotalCount > TakenCount ? TotalCount - TakenCount : 1,
+                         1)};
+  SmallVector<uint32_t, 2> Weights;
+  if (*std::max_element(Counts.begin(), Counts.end()) > UINT32_MAX) {
+    Weights = llvm::downscaleWeights(Counts);
+  } else {
+    Weights.assign(Counts.begin(), Counts.end());
   }
-  MDBuilder MDB(Branch.getContext());
-  Branch.setMetadata(
-      LLVMContext::MD_prof,
-      MDB.createBranchWeights(static_cast<uint32_t>(TakenWeight),
-                              static_cast<uint32_t>(NotTakenWeight)));
+  for (uint32_t &Weight : Weights)
+    Weight = std::max<uint32_t>(Weight, 1);
+  llvm::setBranchWeights(Branch, Weights, /*IsExpected=*/false);
 }
 
 /// Clones a Java invoke onto a newly created path and gives the clone a unique
