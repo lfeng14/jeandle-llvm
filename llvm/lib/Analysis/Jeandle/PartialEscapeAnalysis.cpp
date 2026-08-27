@@ -5341,6 +5341,22 @@ void Analyzer::processAllocation(CallBase *CB) {
   const bool IsArray = jeandle::pea::isJeandleNewArray(CB);
   assert((IsInstance ^ IsArray) &&
          "allocation must be either instance or array");
+  (void)IsArray;
+
+  // The third operand of jeandle.new_instance is not an allocation hint. It
+  // selects the runtime slow path, which performs initialization and
+  // instantiation checks with observable exception/side-effect semantics.
+  // PEA does not model that path, so only the exact fast-path form is
+  // virtualizable. In particular, a runtime-unknown value must not be
+  // treated as false merely because the fast path is the common case.
+  if (IsInstance) {
+    if (CB->arg_size() != 3)
+      return;
+    auto *InitialSlowTest = dyn_cast<ConstantInt>(CB->getArgOperand(2));
+    if (!InitialSlowTest || !InitialSlowTest->getType()->isIntegerTy(1) ||
+        !InitialSlowTest->isZero())
+      return;
+  }
 
   // Refuse to virtualize identity-sensitive allocations.
   // HasFinalizer: classes that override finalize() require HotSpot's
@@ -5392,14 +5408,15 @@ void Analyzer::processAllocation(CallBase *CB) {
     // resolveFieldOffset) will be eligible. ArrayBaseOffset is always set
     // (per-kind when known, else the VM's Object-kind default) so the
     // resolveAccess header guard never degrades to `< 0`.
-    if (auto Kind = jeandle::pea::elementTypeForArrayKlass(Klass)) {
+    jeandle::JBasicType Kind = jeandle::elementTypeForArrayKlass(Klass);
+    if (Kind != jeandle::JBasicType::Count) {
       VO->ArrayBaseOffset =
-          static_cast<uint32_t>(VMConsts.arrayBaseOffsetFor(*Kind));
+          static_cast<uint32_t>(VMConsts.arrayBaseOffsetFor(Kind));
       if (Type *ElemTy =
-              jeandle::pea::llvmElementTypeFor(*Kind, F.getContext())) {
+              jeandle::pea::llvmElementTypeFor(Kind, F.getContext())) {
         VO->ArrayElementType = ElemTy;
         VO->ArrayIndexScale =
-            static_cast<uint32_t>(VMConsts.elementSizeFor(*Kind));
+            static_cast<uint32_t>(VMConsts.elementSizeFor(Kind));
       }
     } else {
       // Unknown element kind: we cannot pin the per-kind element type, but
@@ -8847,8 +8864,8 @@ void Analyzer::validateFinalDeoptObligations() {
     SmallVector<jeandle::ObjectID, 8> Worklist(1, RootID);
     while (!Worklist.empty()) {
       jeandle::ObjectID ID = Worklist.pop_back_val();
-      if (!Visited.insert(ID).second || ID == jeandle::InvalidObjectID ||
-          ID >= Result.VirtualObjects.size())
+      if (ID == jeandle::InvalidObjectID ||
+          ID >= Result.VirtualObjects.size() || !Visited.insert(ID).second)
         continue;
       const jeandle::VirtualObject &VObj = *Result.VirtualObjects[ID];
       if (VObj.IsSynthetic) {
@@ -8888,8 +8905,8 @@ void Analyzer::validateFinalDeoptObligations() {
     SmallVector<jeandle::ObjectID, 8> Worklist(1, RootID);
     while (!Worklist.empty()) {
       jeandle::ObjectID ID = Worklist.pop_back_val();
-      if (!Visited.insert(ID).second || ID == jeandle::InvalidObjectID ||
-          ID >= Result.VirtualObjects.size())
+      if (ID == jeandle::InvalidObjectID ||
+          ID >= Result.VirtualObjects.size() || !Visited.insert(ID).second)
         continue;
       const jeandle::VirtualObject &VObj = *Result.VirtualObjects[ID];
       if (VObj.IsSynthetic) {
