@@ -156,11 +156,12 @@ InvokeInst *createNewCB(InvokeInst &CB, bool IsMonomorphicTarget, int PatchSize,
   }
 
   Module *M = CB.getModule();
+  Function *Target = getOrInsertJavaMethodFunction(*M, MethodName, FuncType,
+                                                   Method, IsAccessor);
+  assert(Target && "CHA target was prevalidated");
   auto *NewCB =
-      InvokeInst::Create(getOrInsertJavaMethodFunction(*M, MethodName, FuncType,
-                                                       Method, IsAccessor),
-                         CB.getNormalDest(), CB.getUnwindDest(), NewArgs,
-                         Bundles, CB.getName(), CB.getIterator());
+      InvokeInst::Create(Target, CB.getNormalDest(), CB.getUnwindDest(),
+                         NewArgs, Bundles, CB.getName(), CB.getIterator());
   copyAttributeAndMetadata(CB, *NewCB, NewArgs.size());
   changeCallAttr(*NewCB, jeandle::Attribute::StatepointNumPatchBytes,
                  std::to_string(PatchSize));
@@ -304,9 +305,17 @@ InvokeInst *optimizeMhIntrinsic(InvokeInst &CB, Function &F, DominatorTree &DT,
         getPatchSize(CB.getModule(), jeandle::Metadata::StaticCallPatchSize);
   }
 
-  // Do not commit any speculative type assumptions unless all arguments were
-  // compatible and the VM accepted the new call-site representation.
+  Type *RetType =
+      java2llvm(static_cast<jeandle::HotspotBasicType>(
+                    Callbacks.GetSignatureArgType(CHAOptInfo.Method, -1)),
+                CB.getContext());
+  FunctionType *FuncType = FunctionType::get(RetType, ArgTypes, false);
+
+  // Do not commit any speculative type assumptions unless the target symbol
+  // is compatible and the VM accepted the new call-site representation.
   if (!NarrowSuccess ||
+      !canGetOrInsertJavaMethodFunction(*CB.getModule(), CHAOptInfo.MethodName,
+                                        FuncType, CHAOptInfo.Method) ||
       !Callbacks.UpdateCallSite(static_cast<int64_t>(Id), DestKind, true,
                                 CHAOptInfo.Method)) {
     for (auto &[_, Value] : JavaTypeAssumeCB) {
@@ -317,16 +326,10 @@ InvokeInst *optimizeMhIntrinsic(InvokeInst &CB, Function &F, DominatorTree &DT,
     return nullptr;
   }
 
-  // Commit the narrowed operands only after validation and construct the
-  // resolved target's LLVM function type.
-  Type *RetType =
-      java2llvm(static_cast<jeandle::HotspotBasicType>(
-                    Callbacks.GetSignatureArgType(CHAOptInfo.Method, -1)),
-                CB.getContext());
+  // Commit the narrowed operands only after validation.
   for (auto &[ArgIdx, AssumeCB] : JavaTypeAssumeCB) {
     CB.setArgOperand(ArgIdx, AssumeCB);
   }
-  FunctionType *FuncType = FunctionType::get(RetType, ArgTypes, false);
   StringRef NewBCName = getByteCodeName(IntrinsicName);
 
   // linkTo* performs the receiver null check implicitly. Preserve that
@@ -432,7 +435,12 @@ bool optimizeCallSite(InvokeInst &CB, Function &F, DominatorTree &DT,
   jeandle::CHAOptInfo OptInfo{ConstraintOrHolder, Method,
                               DeoptReasonOrTargetInfo, std::move(MethodName)};
   if (OptInfo.constraint() == 0 ||
-      !Callbacks.UpdateCallSite(static_cast<int64_t>(Id),
+      !canGetOrInsertJavaMethodFunction(*M, OptInfo.MethodName,
+                                        CB.getFunctionType(), OptInfo.Method)) {
+    return false;
+  }
+
+  if (!Callbacks.UpdateCallSite(static_cast<int64_t>(Id),
                                 OptInfo.isStatic() ? jeandle::StaticCall
                                                    : jeandle::OptVirtualCall,
                                 IsInvokeBasic, OptInfo.Method)) {
@@ -462,9 +470,11 @@ bool optimizeCallSite(InvokeInst &CB, Function &F, DominatorTree &DT,
   // Retarget the invoke after the VM call-site record has been updated.
   updateStaticOptVirtualCallAttrs(
       CB, getPatchSize(M, jeandle::Metadata::StaticCallPatchSize));
-  CB.setCalledFunction(getOrInsertJavaMethodFunction(
-      *CB.getModule(), OptInfo.MethodName, CB.getFunctionType(), OptInfo.Method,
-      OptInfo.isAccessor()));
+  Function *Target = getOrInsertJavaMethodFunction(
+      *M, OptInfo.MethodName, CB.getFunctionType(), OptInfo.Method,
+      OptInfo.isAccessor());
+  assert(Target && "CHA target was prevalidated");
+  CB.setCalledFunction(Target);
   LLVM_DEBUG(dbgs() << "CHA: devirtualized " << CB << "\n");
   DTU.flush();
   return true;

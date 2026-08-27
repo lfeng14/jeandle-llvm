@@ -329,11 +329,6 @@ uintptr_t getCurrentDeoptMethod(const CallBase &CB, uintptr_t RootMethod) {
     return static_cast<uintptr_t>(Method->getZExtValue());
   };
 
-  // Legacy inlinee layout: method marker, method, bci, bci.
-  if (uintptr_t Method =
-          DecodeMethod(Scope.BCIPairStart - 2, Scope.BCIPairStart - 1))
-    return Method;
-
   // Current inlinee layout: method marker, method, should-reexecute, bci, bci.
   if (Scope.BCIPairStart >= 3) {
     if (uintptr_t Method =
@@ -351,7 +346,7 @@ static std::pair<unsigned, unsigned> computeDeoptStackLayout(CallBase &CB) {
   // Each deopt scope starts with a duplicated BCI pair. Inlined scopes are
   // appended after their callers, so the current Java call site is the final
   // scope. Canonical per-scope order is:
-  // [method], bci, bci, locals, stack, monitors, orig_pc.
+  // [method], should-reexecute, bci, bci, locals, stack, monitors, orig_pc.
   for (; InsertPos < Deopt.Inputs.size();) {
     auto *Encoding = dyn_cast<ConstantInt>(Deopt.Inputs[InsertPos].get());
     assert(Encoding != nullptr && "expected deopt value encoding");
