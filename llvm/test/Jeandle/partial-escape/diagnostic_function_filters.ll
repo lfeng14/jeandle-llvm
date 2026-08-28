@@ -93,7 +93,7 @@ unwind:
 define void @"filter.Target.rooted()V.123.root"() gc "hotspotgc" personality ptr @__gxx_personality_v0 {
 entry:
   %obj = invoke hotspotcc ptr addrspace(1) @jeandle.new_instance(
-            ptr inttoptr (i64 4 to ptr), i32 16)
+            ptr inttoptr (i64 4 to ptr), i32 16, i1 false)
           to label %normal unwind label %unwind
 
 normal:
