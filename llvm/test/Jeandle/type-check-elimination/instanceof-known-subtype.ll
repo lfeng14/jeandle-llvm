@@ -47,6 +47,27 @@ miss:
   ret i1 false
 }
 
+; The exact-class intrinsic is symmetric: the loaded Klass may appear in the
+; first argument after an IR rewrite. The hit path must still infer klass 5.
+define i1 @test_exact_klass_guard_reversed(ptr addrspace(1) %obj) gc "hotspotgc" {
+entry:
+  %actual_klass = call ptr addrspace(0) @jeandle.load_klass(
+      ptr addrspace(1) nonnull %obj)
+  %matches = call i1 @jeandle.check_exact_klass(
+      ptr addrspace(0) %actual_klass,
+      ptr addrspace(0) inttoptr (i64 5 to ptr addrspace(0)))
+  br i1 %matches, label %hit, label %miss
+
+hit:
+  %result = call i1 @jeandle.check_instanceof(
+    ptr addrspace(0) inttoptr (i64 4 to ptr),
+    ptr addrspace(1) nonnull %obj)
+  ret i1 %result
+
+miss:
+  ret i1 false
+}
+
 ; A bimorphic profile guard reaches the second target only after the first
 ; exact class comparison fails. The second equality edge must independently
 ; sharpen the receiver to klass 5.
@@ -157,6 +178,9 @@ miss:
 ; CHECK-LABEL: define i1 @test()
 ; CHECK: ret i1 true
 ; CHECK-LABEL: define i1 @test_exact_klass_guard
+; CHECK-LABEL: hit:
+; CHECK-NEXT: ret i1 true
+; CHECK-LABEL: define i1 @test_exact_klass_guard_reversed
 ; CHECK-LABEL: hit:
 ; CHECK-NEXT: ret i1 true
 ; CHECK-LABEL: define i1 @test_bimorphic_second_guard
