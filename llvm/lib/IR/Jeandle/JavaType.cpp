@@ -504,8 +504,7 @@ struct TraceResult {
 /// The intrinsic arguments are treated symmetrically because IR rewrites may
 /// place the loaded Klass in either position.
 static bool isLoadKlassOf(Value *ValueToCheck, Value *QueryObj) {
-  auto *Load =
-      dyn_cast<CallBase>(ValueToCheck->stripPointerCastsAndAliases());
+  auto *Load = dyn_cast<CallBase>(ValueToCheck->stripPointerCastsAndAliases());
   return Load && Load->getCalledFunction() &&
          Load->getCalledFunction()->getName() == "jeandle.load_klass" &&
          Load->arg_size() == 1 &&
