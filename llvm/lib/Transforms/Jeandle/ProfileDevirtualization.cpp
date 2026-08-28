@@ -122,17 +122,13 @@ BasicBlock *createProfileJoinBlock(InvokeInst &CB) {
 
 void addInvokeUnwindEdges(InvokeInst &CB, BasicBlock *HitBlock,
                           ArrayRef<BasicBlock *> ExtraBlocks) {
-  // 复制 invoke 后，新增的调用路径也会跳转到同一个异常目标块。
   BasicBlock *UnwindDest = CB.getUnwindDest();
 
-  // 异常目标块中的 PHI 节点必须为每个异常前驱块提供 incoming value。
   for (PHINode &Phi : UnwindDest->phis()) {
-    // 找到原始 invoke 异常边对应的 PHI 输入值，作为新异常边的模板。
     int HitIndex = Phi.getBasicBlockIndex(HitBlock);
     assert(HitIndex >= 0 && "unwind phi must contain the original invoke edge");
     Value *Incoming = Phi.getIncomingValue(HitIndex);
 
-    // 新增路径与原始路径表示同一个调用上下文，因此复用该输入值。
     for (BasicBlock *ExtraBlock : ExtraBlocks)
       Phi.addIncoming(Incoming, ExtraBlock);
   }
