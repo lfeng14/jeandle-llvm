@@ -492,36 +492,30 @@ struct TraceResult {
 /// one argument is loaded directly from `QueryObj` by `jeandle.load_klass`.
 /// The intrinsic arguments are treated symmetrically because IR rewrites may
 /// place the loaded Klass in either position.
+static bool isLoadKlassOf(Value *ValueToCheck, Value *QueryObj) {
+  auto *Load =
+      dyn_cast<CallBase>(ValueToCheck->stripPointerCastsAndAliases());
+  return Load && Load->getCalledFunction() &&
+         Load->getCalledFunction()->getName() == "jeandle.load_klass" &&
+         Load->arg_size() == 1 &&
+         Load->getArgOperand(0)->stripPointerCastsAndAliases() ==
+             QueryObj->stripPointerCastsAndAliases();
+}
+
 static uintptr_t traceExactKlassGuard(Value *Cond, Value *QueryObj) {
   auto *CB = dyn_cast<CallBase>(Cond);
   Function *Callee = CB ? CB->getCalledFunction() : nullptr;
   if (!Callee || Callee->getName() != "jeandle.check_exact_klass" ||
       CB->arg_size() != 2)
-    return {};
+    return 0;
 
-  QueryObj = QueryObj->stripPointerCastsAndAliases();
-  Value *ExpectedKlass = nullptr;
-  bool HasQueryKlass = false;
-  for (unsigned I = 0; I < 2; ++I) {
-    Value *Arg = CB->getArgOperand(I)->stripPointerCastsAndAliases();
-    auto *LoadCB = dyn_cast<CallBase>(Arg);
-    Function *LoadCallee = LoadCB ? LoadCB->getCalledFunction() : nullptr;
-    bool IsQueryKlass =
-        LoadCallee && LoadCallee->getName() == "jeandle.load_klass" &&
-        LoadCB->arg_size() == 1 &&
-        LoadCB->getArgOperand(0)->stripPointerCastsAndAliases() == QueryObj;
-    if (IsQueryKlass) {
-      if (HasQueryKlass)
-        return {};
-      HasQueryKlass = true;
-    } else {
-      if (ExpectedKlass != nullptr)
-        return {};
-      ExpectedKlass = CB->getArgOperand(I);
-    }
-  }
-  if (!HasQueryKlass || ExpectedKlass == nullptr)
-    return {};
+  bool FirstIsActual = isLoadKlassOf(CB->getArgOperand(0), QueryObj);
+  bool SecondIsActual = isLoadKlassOf(CB->getArgOperand(1), QueryObj);
+  if (FirstIsActual == SecondIsActual)
+    return 0;
+
+  Value *ExpectedKlass =
+      FirstIsActual ? CB->getArgOperand(1) : CB->getArgOperand(0);
   return extractKlassConstant(ExpectedKlass);
 }
 
