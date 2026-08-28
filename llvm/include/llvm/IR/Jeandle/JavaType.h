@@ -24,6 +24,7 @@
 
 namespace llvm {
 
+class BasicBlock;
 class DominatorTree;
 class Instruction;
 class Value;
@@ -87,6 +88,25 @@ struct JavaType {
 /// Unrecognized patterns conservatively return unknown ({}).
 JavaType getJavaType(Value *V, DominatorTree *DT = nullptr,
                      Instruction *Context = nullptr);
+
+/// Compute the type constraints that dominating jeandle.check_instanceof
+/// checks imply for V at Context. Returns ONLY check-derived constraints (a
+/// positive klass when a passing check proves it, with Exact set from
+/// IsEffectivelyFinal, plus excluded klasses from failed checks) — never
+/// attribute/metadata-derived base types.
+///
+/// When DestBB is non-null, Context must be the terminator of a PHI incoming
+/// block and DestBB the PHI's parent block; the incoming block's own
+/// conditional branch is then considered: a PHI incoming use is edge-local,
+/// so if exactly one successor is DestBB, that outcome's constraints apply to
+/// the value flowing along that edge. When DestBB is null, Context's own
+/// branch is not considered.
+///
+/// The result depends only on the CFG, branch conditions and VM callbacks; it
+/// is constant while those are unchanged. Sound under the same non-null oop
+/// contract as getJavaType.
+JavaType sharpenFromDominators(Value *V, Instruction *Context,
+                               DominatorTree &DT, BasicBlock *DestBB = nullptr);
 
 /// Compute the type union of two Java types. Used when the value could be
 /// either type (PHI, select). Widens positive type to LCA and intersects

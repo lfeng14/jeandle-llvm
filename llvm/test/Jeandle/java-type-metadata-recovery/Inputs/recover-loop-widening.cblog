@@ -4,3 +4,6 @@ IsUnverifiedInterface 7 = false
 IsEffectivelyFinal 7 = false
 GetCommonSuperKlass 5 7 = 10
 GetFieldType 10 16 = 7
+# No object-array klass reaches the dispatch: element query returns 0.
+ArrayElementKlass 5 = 0
+ArrayElementKlass 10 = 0

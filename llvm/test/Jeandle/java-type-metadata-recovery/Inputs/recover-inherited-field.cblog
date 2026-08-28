@@ -3,3 +3,5 @@
 GetFieldType 7 16 = 9
 IsUnverifiedInterface 9 = false
 IsEffectivelyFinal 9 = false
+# No object-array klass reaches the dispatch: element query returns 0.
+ArrayElementKlass 7 = 0

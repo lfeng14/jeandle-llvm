@@ -293,6 +293,17 @@ JavaType jeandle::typeIntersect(JavaType A, JavaType B) {
       // Exact. (Dual of typeUnion's A.Exact && B.Exact for the equal case.)
       Result.Klass = A.Klass;
       Result.Exact = A.Exact || B.Exact;
+    } else if (A.Exact != B.Exact) {
+      // Exactly one side is Exact: an exact claim is a complete dynamic-type
+      // claim (allocation type, constant oop's runtime klass, or a final
+      // klass proven by a passing check), so the exact side is always at
+      // least as strong as anything the other side could contribute. When the
+      // two sides are also inconsistent (no common subtype — only reachable
+      // with different klasses here), no live value satisfies both claims and
+      // the program point is dead, so keeping the exact side is vacuously
+      // sound there and avoids needlessly degrading to unknown.
+      Result.Klass = A.Exact ? A.Klass : B.Klass;
+      Result.Exact = true;
     } else if (CB->IsSubtype(A.Klass, B.Klass)) {
       Result.Klass = A.Klass;
       Result.Exact = A.Exact;
@@ -985,17 +996,28 @@ static TraceResult traceToCheckInstanceof(Value *Cond, Value *QueryObj,
 // Context-sensitive sharpening
 // =============================================================================
 
+/// Compute the type constraints that dominating jeandle.check_instanceof
+/// checks imply for V at Context. Returns ONLY check-derived constraints,
+/// never attribute/metadata-derived base types.
+///
 /// DestBB: for PHI incoming processing, the PHI's parent block. When provided,
-/// the incoming block's own branch is considered for sharpening (the branch
-/// targets DestBB, so it should be considered to sharpen the PHI's type).
+/// Context must be the terminator of a PHI incoming block; the incoming
+/// block's own branch is then considered for sharpening: a PHI incoming use
+/// is edge-local, so if exactly one of the branch's successors is DestBB,
+/// that outcome's constraints necessarily held along that edge — regardless
+/// of whether the edge dominates DestBB (which fails for acyclic
+/// multi-predecessor merges and multi-predecessor loop headers alike).
 /// For non-PHI contexts, DestBB is nullptr and the context block's own branch
 /// is skipped.
-static JavaType sharpenFromDominators(Value *V, Instruction *Context,
-                                      DominatorTree &DT,
-                                      BasicBlock *DestBB = nullptr) {
+///
+/// The result depends only on the CFG, branch conditions and VM callbacks; it
+/// is constant while those are unchanged.
+JavaType jeandle::sharpenFromDominators(Value *V, Instruction *Context,
+                                        DominatorTree &DT, BasicBlock *DestBB) {
   const VMCallbacks *CB = getVMCallbacks();
   assert(CB && CB->IsSubtype && "VMCallbacks must be set");
 
+  V = V->stripPointerCastsAndAliases();
   BasicBlock *ContextBB = Context->getParent();
   JavaType Best;
 
@@ -1014,21 +1036,15 @@ static JavaType sharpenFromDominators(Value *V, Instruction *Context,
     BasicBlock *TrueBB = BI->getSuccessor(0);
     BasicBlock *FalseBB = BI->getSuccessor(1);
 
-    // For ContextBB's own branch, check against DestBB (the PHI's block).
-    // For dominator blocks above ContextBB, check against ContextBB as before.
-    BasicBlock *CheckBB = (BB == ContextBB) ? DestBB : ContextBB;
-
-    // Apply constraints from whichever branch edge dominates the context.
-    // Block dominance alone (DT.dominates(SuccBB, CheckBB)) is insufficient:
-    // SuccBB might be reachable from both edges of the branch if it has
-    // multiple predecessors. Use edge dominance via BasicBlockEdge, which
-    // correctly handles loop back-edges and multi-predecessor successors.
-    BasicBlockEdge TrueEdge(BB, TrueBB);
-    BasicBlockEdge FalseEdge(BB, FalseBB);
-
     uintptr_t Exact = traceExactKlassGuard(BI->getCondition(), V);
     if (Exact != 0) {
-      if (DT.dominates(TrueEdge, CheckBB)) {
+      bool TrueApplies;
+      if (BB == ContextBB) {
+        TrueApplies = TrueBB == DestBB && FalseBB != DestBB;
+      } else {
+        TrueApplies = DT.dominates(BasicBlockEdge(BB, TrueBB), ContextBB);
+      }
+      if (TrueApplies) {
         LLVM_DEBUG(dbgs() << "JavaType: sharpened " << *V << " to exact klass "
                           << Exact << " from dominating klass guard in "
                           << BB->getName() << "\n");
@@ -1047,14 +1063,45 @@ static JavaType sharpenFromDominators(Value *V, Instruction *Context,
         traceToCheckInstanceof(BI->getCondition(), V, TraceVisited, DT);
     if (!TR.matched())
       continue;
+
     uintptr_t Klass = 0;
     const SmallDenseSet<uintptr_t, 2> *Exclusions = nullptr;
-    if (DT.dominates(TrueEdge, CheckBB)) {
-      Klass = TR.TrueKlass;
-      Exclusions = &TR.TrueExclusions;
-    } else if (DT.dominates(FalseEdge, CheckBB)) {
-      Klass = TR.FalseKlass;
-      Exclusions = &TR.FalseExclusions;
+
+    if (BB == ContextBB) {
+      // PHI incoming case (DestBB provided): the value reaches the PHI along
+      // exactly one edge ContextBB -> DestBB, so whichever branch outcome
+      // targets DestBB necessarily held on that edge. This is a strict
+      // strengthening of edge dominance (used below for dominator blocks),
+      // which additionally fails whenever DestBB has multiple predecessors:
+      // acyclic merges, and loop headers whose conditional latch tests the
+      // carried value.
+      bool TrueIsDest = (TrueBB == DestBB);
+      bool FalseIsDest = (FalseBB == DestBB);
+      if (TrueIsDest && !FalseIsDest) {
+        Klass = TR.TrueKlass;
+        Exclusions = &TR.TrueExclusions;
+      } else if (FalseIsDest && !TrueIsDest) {
+        Klass = TR.FalseKlass;
+        Exclusions = &TR.FalseExclusions;
+      }
+      // Both successors are DestBB (duplicate edges): no outcome information.
+    } else {
+      // Dominator block above ContextBB: the constraint must hold for ALL
+      // executions reaching ContextBB (a block-local use), so apply
+      // constraints from whichever branch edge dominates the context. Block
+      // dominance alone (DT.dominates(SuccBB, ContextBB)) is insufficient:
+      // SuccBB might be reachable from both edges of the branch if it has
+      // multiple predecessors. Use edge dominance via BasicBlockEdge, which
+      // correctly handles loop back-edges and multi-predecessor successors.
+      BasicBlockEdge TrueEdge(BB, TrueBB);
+      BasicBlockEdge FalseEdge(BB, FalseBB);
+      if (DT.dominates(TrueEdge, ContextBB)) {
+        Klass = TR.TrueKlass;
+        Exclusions = &TR.TrueExclusions;
+      } else if (DT.dominates(FalseEdge, ContextBB)) {
+        Klass = TR.FalseKlass;
+        Exclusions = &TR.FalseExclusions;
+      }
     }
 
     if (Klass != 0) {

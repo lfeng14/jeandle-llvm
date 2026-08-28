@@ -147,8 +147,14 @@ ModulePassManager Pipeline::buildJeandlePipeline(PassBuilder &PB,
   ModulePassManager PM;
   PM.addPass(JavaOperationLower(0));
   FunctionPassManager PreCHACleanup;
-  PreCHACleanup.addPass(InstSimplifyPass());
+  // RecoverTypeInfo runs first so that oop loads (including array element
+  // loads, which the frontend deliberately leaves untyped) carry !java-klass
+  // metadata before any consumer or metadata-stripping pass. It must run
+  // after JavaOperationLower(0): only then do the inlined instanceof/checkcast
+  // bodies expose the jeandle.check_instanceof calls that its context-sensitive
+  // type queries rely on.
   PreCHACleanup.addPass(RecoverTypeInfo());
+  PreCHACleanup.addPass(InstSimplifyPass());
   PreCHACleanup.addPass(TypeCheckElimination());
   PreCHACleanup.addPass(RepeatedConstantFolding());
   PreCHACleanup.addPass(EarlyCSEPass());

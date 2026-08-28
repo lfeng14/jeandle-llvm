@@ -1,0 +1,4 @@
+# Klass 20 is an object-array klass whose element klass 21 is effectively final.
+ArrayElementKlass 20 = 21
+IsUnverifiedInterface 21 = false
+IsEffectivelyFinal 21 = true

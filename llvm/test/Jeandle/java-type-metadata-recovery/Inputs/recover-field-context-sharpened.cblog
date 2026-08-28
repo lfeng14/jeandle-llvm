@@ -1,0 +1,7 @@
+# Opaque call result sharpened to klass 30 by the dominating check_instanceof;
+# its field at offset 16 is declared as klass 31.
+IsEffectivelyFinal 30 = false
+ArrayElementKlass 30 = 0
+GetFieldType 30 16 = 31
+IsUnverifiedInterface 31 = false
+IsEffectivelyFinal 31 = false

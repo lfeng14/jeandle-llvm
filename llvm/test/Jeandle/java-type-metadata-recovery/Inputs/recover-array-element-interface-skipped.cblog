@@ -1,0 +1,4 @@
+# Klass 20 is an object-array klass whose element klass 25 is an unverified
+# interface: the load must stay untyped.
+ArrayElementKlass 20 = 25
+IsUnverifiedInterface 25 = true

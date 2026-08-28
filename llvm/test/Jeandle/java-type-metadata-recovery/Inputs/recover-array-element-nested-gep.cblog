@@ -1,0 +1,4 @@
+# Klass 20 is an object-array klass whose element klass is 21.
+ArrayElementKlass 20 = 21
+IsUnverifiedInterface 21 = false
+IsEffectivelyFinal 21 = false
