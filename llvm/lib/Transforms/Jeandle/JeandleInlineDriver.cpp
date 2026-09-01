@@ -242,8 +242,7 @@ PreservedAnalyses JeandleInlineDriver::run(Module &M,
     FunctionAnalysisManager &FAM =
         MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
     PreservedAnalyses DevirtPA = Devirtualization.run(*RootFunction, FAM);
-    // CHA may have changed the root IR. Invalidate its stale function
-    // analyses before profile devirtualization queries the same function.
+    // Invalidate analyses changed by CHA before profile devirtualization.
     FAM.invalidate(*RootFunction, DevirtPA);
     PreservedAnalyses ProfileDevirtPA = ProfileDevirt.run(*RootFunction, FAM);
     bool AddedMonomorphicTargets =
