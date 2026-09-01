@@ -242,11 +242,13 @@ PreservedAnalyses JeandleInlineDriver::run(Module &M,
     FunctionAnalysisManager &FAM =
         MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
     PreservedAnalyses DevirtPA = Devirtualization.run(*RootFunction, FAM);
+    // CHA may have changed the root IR. Invalidate its stale function
+    // analyses before profile devirtualization queries the same function.
+    FAM.invalidate(*RootFunction, DevirtPA);
     PreservedAnalyses ProfileDevirtPA = ProfileDevirt.run(*RootFunction, FAM);
     bool AddedMonomorphicTargets =
         !DevirtPA.areAllPreserved() || !ProfileDevirtPA.areAllPreserved();
     Changed |= AddedMonomorphicTargets;
-    FAM.invalidate(*RootFunction, DevirtPA);
     FAM.invalidate(*RootFunction, ProfileDevirtPA);
     PreservedAnalyses DevirtModulePA = PreservedAnalyses::all();
     DevirtModulePA.intersect(std::move(DevirtPA));
